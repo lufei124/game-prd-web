@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import "./style.css";
+import { ModelPicker } from "./ModelPicker";
 type Field = {
   name: string;
   label: string;
@@ -1721,48 +1722,17 @@ function App() {
                       >
                         <Plus size={22} />
                       </button>
-                      <span className="composer-confirmation">
-                        <Shield size={17} />
-                        由你确认
-                      </span>
-                      <button
-                        className="composer-model"
-                        title="选择本次任务模型与思考深度"
-                        aria-label="选择本次任务模型与思考深度"
-                        onClick={() =>
-                          open({
-                            title: "本次任务模型",
-                            description:
-                              "仅应用于接下来提交的任务，已运行任务的模型与版本保持不变。",
-                            fields: assistantFields({
-                              executor: effectiveExecutor,
-                              model: effectiveModel,
-                              reasoningEffort: effectiveEffort,
-                            }).map((f) =>
-                              f.name === "executor"
-                                ? { ...f, label: "产品助手" }
-                                : f,
-                            ),
-                            action: async (v) => {
-                              setExecutor(v.executor);
-                              setTaskModel(v.model.trim());
-                              setReasoningEffort(v.reasoningEffort);
-                            },
-                          })
-                        }
-                      >
-                        <span>
-                          {effectiveModel
-                            .replace(/^gpt-/, "")
-                            .replace(/-/g, " ")}
-                        </span>
-                        <span className="composer-effort">
-                          {effortOptions
-                            .find((x) => x.value === effectiveEffort)
-                            ?.label.split(" · ")[0] || effectiveEffort}
-                        </span>
-                        <ChevronDown size={16} />
-                      </button>
+                      <ModelPicker
+                        model={effectiveModel}
+                        effort={effectiveEffort}
+                        executor={effectiveExecutor}
+                        models={modelChoices}
+                        efforts={effortOptions}
+                        onChange={(model, effort) => {
+                          setTaskModel(model);
+                          setReasoningEffort(effort);
+                        }}
+                      />
                       <button
                         className="send-button"
                         disabled={

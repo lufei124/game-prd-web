@@ -404,15 +404,17 @@ test("central assistant layout, subscription login UI and permanent recycle-bin 
   await page
     .getByRole("button", { name: "选择本次任务模型与思考深度" })
     .click();
-  await dialog(page, "模型 ID", "gpt-6-astra");
   await page
-    .getByRole("dialog")
-    .getByLabel("思考深度", { exact: true })
-    .selectOption("low");
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "保存", exact: true })
+    .getByRole("dialog", { name: "本次任务模型" })
+    .getByRole("button", { name: "6 astra", exact: true })
     .click();
+  await page
+    .getByRole("dialog", { name: "本次任务模型" })
+    .getByRole("button", { name: "低", exact: true })
+    .click();
+  await expect(
+    page.getByRole("dialog", { name: "本次任务模型" }),
+  ).not.toBeVisible();
   await expect(page.locator(".composer-model")).toContainText("6 astra");
   await expect(page.locator(".composer-model")).toContainText("低");
   await page.getByRole("button", { name: "任务配置", exact: true }).click();
