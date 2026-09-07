@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { Store, check, uid, now, hash } from "./db.ts";
+
 export const kindSchema = z.enum(["requirement", "prototype", "prd", "review"]);
 export type ArtifactKind = z.infer<typeof kindSchema>;
+
 export const prototypeSchema = z.object({
   schemaVersion: z.literal("1.0"),
   requirementName: z.string().min(1),
@@ -40,6 +42,7 @@ export const prototypeSchema = z.object({
     }),
   ),
 });
+
 export const reviewSchema = z.object({
   issues: z.array(
     z.object({
@@ -51,6 +54,7 @@ export const reviewSchema = z.object({
   ),
   summary: z.string(),
 });
+
 export type Version = {
   id: string;
   requirementId: string;
@@ -65,6 +69,7 @@ export type Version = {
   hash: string;
   taskId?: string;
 };
+
 export type Requirement = {
   id: string;
   projectId: string;
@@ -77,8 +82,10 @@ export type Requirement = {
   stale: boolean;
   createdAt: string;
 };
+
 export class Domain {
   constructor(public s: Store) {}
+
   project(name: string) {
     check(name.trim(), "请输入项目名称");
     return this.s.put("project", {
@@ -88,6 +95,7 @@ export class Domain {
       createdAt: now(),
     });
   }
+
   deleteProject(id: string, confirmedName: string, actor = "user") {
     check(actor === "user", "只有用户可以删除项目", 403);
     return this.s.tx(() => {
@@ -141,6 +149,7 @@ export class Domain {
       return { id, deleted: true };
     });
   }
+
   restoreProject(id: string, actor = "user") {
     check(actor === "user", "只有用户可以恢复项目", 403);
     return this.s.tx(() => {
@@ -159,6 +168,7 @@ export class Domain {
       return this.s.get("project", id);
     });
   }
+
   requirement(
     projectId: string,
     name: string,
@@ -177,19 +187,26 @@ export class Domain {
       createdAt: now(),
     });
   }
+
   versions(id: string) {
-    return this.s.all<Version>("version").filter((v) => v.requirementId === id);
+    return this.s
+      .all<Version>("version")
+      .filter((v) => v.requirementId === id);
   }
+
   conversationStage(r: Requirement) {
     if (r.mode === "prototype") return "prototype";
     if (r.mode === "review") return r.heads.prd ? "review" : "prd";
     if (r.mode === "publish") return "prd";
-    if (!r.heads.requirement || r.confirmed.requirement !== r.heads.requirement) return "requirement";
+    if (!r.heads.requirement || r.confirmed.requirement !== r.heads.requirement)
+      return "requirement";
     if (!r.heads.prototype || r.confirmed.prototype !== r.heads.prototype) {
-      if (r.waiver?.requirementVersion !== r.heads.requirement) return "prototype";
+      if (r.waiver?.requirementVersion !== r.heads.requirement)
+        return "prototype";
     }
     return "prd";
   }
+
   stage(r: Requirement) {
     if (r.mode === "prototype")
       return r.heads.prototype && r.heads.prototype === r.confirmed.prototype
@@ -209,13 +226,17 @@ export class Domain {
       return "需求已确认 / 生成原型";
     return "需求整理与确认";
   }
+
   gate(r: Requirement, kind: ArtifactKind) {
     if (r.mode === "prototype") {
       check(kind === "prototype", "仅原型任务不创建无关成果");
       return;
     }
     if (r.mode === "review" || r.mode === "publish") {
-      check(kind === "prd" || kind === "review", "独立评审/发布任务只接受 PRD");
+      check(
+        kind === "prd" || kind === "review",
+        "独立评审/发布任务只接受 PRD",
+      );
       return;
     }
     if (kind === "prototype" && r.mode === "full")
@@ -239,6 +260,7 @@ export class Domain {
     }
     if (kind === "review") check(r.heads.prd, "请先提供 PRD", 409);
   }
+
   save(
     id: string,
     kind: ArtifactKind,
@@ -339,6 +361,7 @@ export class Domain {
       return v;
     });
   }
+
   confirm(id: string, kind: ArtifactKind, versionId: string, actor = "user") {
     check(actor === "user", "Agent 无权确认成果", 403);
     return this.s.tx(() => {
@@ -372,6 +395,7 @@ export class Domain {
       return r;
     });
   }
+
   waive(id: string, versionId: string, reason: string, actor = "user") {
     check(actor === "user", "Agent 无权豁免原型", 403);
     check(reason.trim(), "请说明无 UI/交互变化的依据");
@@ -387,30 +411,36 @@ export class Domain {
     this.s.audit(actor, "prototype.waive", id, r.waiver);
     return r;
   }
+
   finalize(id: string, versionId: string, actor = "user") {
     check(actor === "user", "Agent 无权确认终稿", 403);
     const r = this.s.get<Requirement>("requirement", id);
-    check(r.heads.prd === versionId && !r.stale, "PRD 版本已变化或待同步", 409);
+    check(
+      r.heads.prd === versionId && !r.stale,
+      "PRD 版本已变化或待同步",
+      409,
+    );
     this.gate(r, "prd");
-    if (r.mode !== "publish") {
-      const review =
-        r.heads.review && this.s.get<Version>("version", r.heads.review);
-      check(
-        review && review.links.prd === versionId,
-        "请对当前 PRD 完成评审",
-        409,
-      );
+
+    // Multi-agent review is optional. If a review exists for the current PRD,
+    // its non-minor issues still require an explicit user decision. If no review
+    // exists, finalization records that it was intentionally skipped.
+    const review =
+      r.heads.review && this.s.get<Version>("version", r.heads.review);
+    const currentReview = review && review.links.prd === versionId ? review : null;
+    if (currentReview) {
       const resolutions = this.s
         .all("resolution")
-        .filter((x) => x.reviewId === review.id);
+        .filter((x) => x.reviewId === currentReview.id);
       check(
-        review.metadata.issues
+        currentReview.metadata.issues
           .filter((x: any) => x.severity !== "minor")
           .every((x: any) => resolutions.some((y) => y.issueId === x.id)),
         "重大评审问题需逐项处理或由用户明确裁决",
         409,
       );
     }
+
     r.finalVersion = versionId;
     this.s.put("requirement", r);
     this.s.put("confirmation", {
@@ -419,11 +449,18 @@ export class Domain {
       kind: "final",
       versionId,
       actor,
+      reviewStatus: currentReview ? "reviewed" : "skipped",
+      reviewVersionId: currentReview?.id || null,
       createdAt: now(),
     });
-    this.s.audit(actor, "prd.finalize", id, { versionId });
+    this.s.audit(actor, "prd.finalize", id, {
+      versionId,
+      reviewStatus: currentReview ? "reviewed" : "skipped",
+      reviewVersionId: currentReview?.id || null,
+    });
     return r;
   }
+
   restore(id: string, versionId: string, base: string | null) {
     const v = this.s.get<Version>("version", versionId);
     check(v.requirementId === id, "不能恢复其他需求的版本", 403);
@@ -438,6 +475,7 @@ export class Domain {
       { ...v.links, restoredFrom: v.id },
     );
   }
+
   annotate(id: string, versionId: string, pageId: string, text: string) {
     const v = this.s.get<Version>("version", versionId);
     check(
@@ -470,8 +508,10 @@ export function completeness(content: string) {
       description,
       suggestion: "补充具体规则与可观察的验收依据，或记录用户裁决。",
     });
-  if (!/R-\d{3}/.test(content)) add("CHECK-RULES", "未发现稳定的业务规则编号");
-  if (!/AC-\d{3}/.test(content)) add("CHECK-AC", "未发现可追溯的验收标准编号");
+  if (!/R-\d{3}/.test(content))
+    add("CHECK-RULES", "未发现稳定的业务规则编号");
+  if (!/AC-\d{3}/.test(content))
+    add("CHECK-AC", "未发现可追溯的验收标准编号");
   if (!/异常|失败|错误|边界|exception|failure|boundary/i.test(content))
     add("CHECK-BOUNDARY", "未识别异常或边界处理内容");
   if (/待确认|待补充|\bTODO\b|\bTBD\b/i.test(content))
