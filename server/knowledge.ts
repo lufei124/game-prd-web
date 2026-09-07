@@ -2,10 +2,73 @@ import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join, extname, basename } from "node:path";
 import { Store, uid, now, check, hash } from "./db.ts";
 import { KnowledgeTree } from "./knowledge-tree.ts";
+
+function queryTerms(query: string) {
+  const lower = query.toLowerCase();
+  const words = lower.match(/[a-z0-9][a-z0-9._-]+|[\u4e00-\u9fff]{2,8}/g) || [];
+  const han = lower.match(/[\u4e00-\u9fff]+/g) || [];
+  const bigrams = han.flatMap((run) =>
+    run.length < 2
+      ? [run]
+      : Array.from({ length: run.length - 1 }, (_, i) => run.slice(i, i + 2)),
+  );
+  return [...new Set([...words, ...bigrams].filter(Boolean))].slice(0, 80);
+}
+
+function chunks(text: string, max = 1100, overlap = 160) {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) return [];
+  const blocks = normalized.split(/\n(?=#{1,6}\s)|\n{2,}/).filter(Boolean);
+  const result: { index: number; text: string; heading: string }[] = [];
+  let carry = "";
+  let heading = "";
+  const push = (body: string) => {
+    const value = body.trim();
+    if (!value) return;
+    result.push({ index: result.length, text: value, heading });
+  };
+  for (const block of blocks) {
+    const h = block.match(/^#{1,6}\s+(.+)$/m);
+    if (h) heading = h[1].trim();
+    const next = carry ? carry + "\n\n" + block : block;
+    if (next.length <= max) {
+      carry = next;
+      continue;
+    }
+    if (carry) push(carry);
+    if (block.length <= max) {
+      carry = block;
+      continue;
+    }
+    let start = 0;
+    while (start < block.length) {
+      push(block.slice(start, start + max));
+      start += Math.max(1, max - overlap);
+    }
+    carry = "";
+  }
+  if (carry) push(carry);
+  return result;
+}
+
+function count(haystack: string, needle: string, limit = 6) {
+  if (!needle) return 0;
+  let n = 0;
+  let at = 0;
+  while (n < limit) {
+    at = haystack.indexOf(needle, at);
+    if (at < 0) break;
+    n++;
+    at += Math.max(1, needle.length);
+  }
+  return n;
+}
+
 export class Knowledge {
   constructor(public s: Store) {
     new KnowledgeTree(s).migrate();
   }
+
   async import(
     projectId: string,
     requirementId: string | null,
@@ -82,45 +145,69 @@ export class Knowledge {
       text,
       status,
       error,
+      chunkCount: status === "parsed" ? chunks(text).length : 0,
       createdAt: now(),
     };
     this.s.put("knowledge", item);
     return item;
   }
+
   search(
     projectId: string,
     requirementId: string | null,
     query: string,
     items?: any[],
   ) {
-    const tokens = [
-      ...new Set(
-        query.toLowerCase().match(/[a-z0-9]+|[\u4e00-\u9fff]{1,2}/g) || [],
-      ),
-    ];
-    return (items || this.s.all("knowledge"))
-      .filter(
-        (x) =>
-          !x.deletedAt &&
-          x.projectId === projectId &&
-          (!x.requirementId || x.requirementId === requirementId) &&
-          x.status === "parsed",
-      )
-      .map((x) => ({
-        ...x,
-        score: tokens.reduce(
-          (n, t) =>
-            n +
-            (x.name.toLowerCase().includes(t) ? 8 : 0) +
-            (x.module.includes(t) ? 5 : 0) +
-            Math.min(x.text.toLowerCase().split(t).length - 1, 5),
-          0,
-        ),
-      }))
-      .filter((x) => !tokens.length || x.score > 0)
+    const terms = queryTerms(query);
+    const phrase = query.trim().toLowerCase();
+    const sourceItems = (items || this.s.all("knowledge")).filter(
+      (x) =>
+        !x.deletedAt &&
+        x.projectId === projectId &&
+        (!x.requirementId || x.requirementId === requirementId) &&
+        x.status === "parsed",
+    );
+
+    // Only the newest version of the same logical source participates in live
+    // retrieval. Older versions remain in storage for historical task snapshots.
+    const latest = new Map<string, any>();
+    for (const item of sourceItems) {
+      const key = `${item.requirementId || "project"}|${item.source}|${item.name}`;
+      const current = latest.get(key);
+      if (!current || (current.version || 0) < (item.version || 0)) latest.set(key, item);
+    }
+
+    return [...latest.values()]
+      .map((item) => {
+        const name = String(item.name || "").toLowerCase();
+        const module = String(item.module || "").toLowerCase();
+        const ranked = chunks(item.text).map((chunk) => {
+          const body = chunk.text.toLowerCase();
+          const heading = chunk.heading.toLowerCase();
+          let score = 0;
+          for (const term of terms) {
+            score += count(body, term) * 2;
+            if (heading.includes(term)) score += 8;
+            if (name.includes(term)) score += 10;
+            if (module.includes(term)) score += 5;
+          }
+          if (phrase.length >= 4 && body.includes(phrase)) score += 18;
+          return { ...chunk, score };
+        });
+        const matchedChunks = ranked
+          .filter((x) => x.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 3);
+        const score =
+          matchedChunks.reduce((sum, x, i) => sum + x.score / (i + 1), 0) +
+          (matchedChunks.length ? 2 : 0);
+        return { ...item, score, matchedChunks };
+      })
+      .filter((x) => !terms.length || x.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, 12);
   }
+
   conflicts(projectId: string) {
     const items = this.s
       .all("knowledge")
@@ -144,6 +231,7 @@ export class Knowledge {
       }
     return pairs;
   }
+
   propose(id: string, text: string, reason: string, actor = "agent") {
     const k = this.s.get("knowledge", id);
     check(!k.requirementId, "仅项目知识支持更新提案");
@@ -158,6 +246,7 @@ export class Knowledge {
       createdAt: now(),
     });
   }
+
   async adopt(id: string, actor = "user") {
     check(actor === "user", "正式知识更新必须由用户采纳", 403);
     const p = this.s.get("proposal", id);
@@ -189,6 +278,7 @@ export class Knowledge {
     this.s.audit(actor, "knowledge.adopt", id);
     return result;
   }
+
   file(id: string) {
     this.s.get("knowledge", id);
     return readFile(join(this.s.root, "files", id));
