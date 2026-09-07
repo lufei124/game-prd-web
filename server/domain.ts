@@ -412,6 +412,19 @@ export class Domain {
     return r;
   }
 
+  private prdLineage(versionId: string) {
+    const ids = new Set<string>();
+    let current: Version | undefined = this.s.get<Version>("version", versionId);
+    while (current && current.kind === "prd" && !ids.has(current.id)) {
+      ids.add(current.id);
+      if (!current.parentId) break;
+      const parent = this.s.maybe<Version>("version", current.parentId);
+      if (!parent || parent.kind !== "prd") break;
+      current = parent;
+    }
+    return ids;
+  }
+
   finalize(id: string, versionId: string, actor = "user") {
     check(actor === "user", "Agent 无权确认终稿", 403);
     const r = this.s.get<Requirement>("requirement", id);
@@ -422,24 +435,36 @@ export class Domain {
     );
     this.gate(r, "prd");
 
-    // Multi-agent review is optional. If a review exists for the current PRD,
-    // its non-minor issues still require an explicit user decision. If no review
-    // exists, finalization records that it was intentionally skipped.
-    const review =
-      r.heads.review && this.s.get<Version>("version", r.heads.review);
-    const currentReview = review && review.links.prd === versionId ? review : null;
-    if (currentReview) {
+    // Review is optional. If the final PRD descends from a reviewed PRD, retain
+    // that review lineage instead of incorrectly recording the flow as skipped.
+    const lineage = this.prdLineage(versionId);
+    const relevantReviews = this.versions(id)
+      .filter(
+        (v) =>
+          v.kind === "review" &&
+          typeof v.links?.prd === "string" &&
+          lineage.has(v.links.prd),
+      )
+      .sort((a, b) => b.number - a.number);
+    const review = relevantReviews[0] || null;
+    if (review) {
       const resolutions = this.s
         .all("resolution")
-        .filter((x) => x.reviewId === currentReview.id);
+        .filter((x) => x.reviewId === review.id);
       check(
-        currentReview.metadata.issues
-          .filter((x: any) => x.severity !== "minor")
-          .every((x: any) => resolutions.some((y) => y.issueId === x.id)),
-        "重大评审问题需逐项处理或由用户明确裁决",
+        review.metadata.issues.every((issue: any) =>
+          resolutions.some((decision) => decision.issueId === issue.id),
+        ),
+        "评审问题需逐项选择采纳、不采纳或稍后处理",
         409,
       );
     }
+
+    const reviewStatus = !review
+      ? "skipped"
+      : review.links.prd === versionId
+        ? "reviewed"
+        : "reviewed_then_modified";
 
     r.finalVersion = versionId;
     this.s.put("requirement", r);
@@ -449,14 +474,16 @@ export class Domain {
       kind: "final",
       versionId,
       actor,
-      reviewStatus: currentReview ? "reviewed" : "skipped",
-      reviewVersionId: currentReview?.id || null,
+      reviewStatus,
+      reviewVersionId: review?.id || null,
+      reviewedPrdVersionId: review?.links?.prd || null,
       createdAt: now(),
     });
     this.s.audit(actor, "prd.finalize", id, {
       versionId,
-      reviewStatus: currentReview ? "reviewed" : "skipped",
-      reviewVersionId: currentReview?.id || null,
+      reviewStatus,
+      reviewVersionId: review?.id || null,
+      reviewedPrdVersionId: review?.links?.prd || null,
     });
     return r;
   }
