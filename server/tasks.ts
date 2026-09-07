@@ -95,9 +95,7 @@ export class Tasks {
       if (waiting) {
         for (const q of this.s
           .all("question")
-          .filter(
-            (q) => q.taskId === waiting.id && q.status === "open",
-          )) {
+          .filter((q) => q.taskId === waiting.id && q.status === "open")) {
           this.s.put("question", {
             ...q,
             status: "answered",
@@ -115,23 +113,88 @@ export class Tasks {
 
     const system = this.s.get("settings", "system");
     const p = this.s.get("project", r.projectId);
+    const preferences = this.s.get("requirement", id).assistantDefaults || {};
+    const defaults = {
+      ...system.defaults,
+      ...p.defaults,
+      ...preferences,
+      ...body.settings,
+    };
 
-    // Stage behavior is fixed in agentPrompt. The only user-editable model resource
-    // is the global PRD template, retained in the legacy release store for migration
-    // compatibility but no longer exposed as an extension system.
-    const chosen =
-      !body.chatOnly && body.kind === "prd" && system.defaults?.templateId
-        ? [system.defaults.templateId]
-        : [];
+    // Conversation-first UI uses fixed built-in stage behavior. Only the global
+    // PRD template enters a conversation task. Legacy direct task APIs keep their
+    // old resource selection so existing histories and automation remain replayable.
+    let chosen: any[] = [];
+    if (!body.chatOnly && body.conversation) {
+      if (body.kind === "prd" && system.defaults?.templateId)
+        chosen = [system.defaults.templateId];
+    } else if (!body.chatOnly) {
+      chosen = body.skillIds?.length
+        ? [...body.skillIds]
+        : [
+            preferences.skills?.[body.kind] ||
+              p.defaults?.skills?.[body.kind] ||
+              system.defaults.skills?.[body.kind],
+          ].filter(Boolean);
+      if (body.kind === "prototype")
+        chosen.push(body.styleId || defaults.styleId);
+      if (body.kind === "prd")
+        chosen.push(body.templateId || defaults.templateId);
+    }
+
     const releases = [...new Set(chosen)]
       .filter(Boolean)
       .map((x) => this.ext.select(x as string, r.projectId, body.kind));
-    if (!body.chatOnly && body.kind === "prd")
+
+    if (!body.chatOnly && body.conversation && body.kind === "prd")
       check(
         releases.some((x) => x.manifest.type === "template"),
         "全局 PRD 模板不可用，请在设置中恢复默认模板",
         409,
       );
+
+    if (!body.chatOnly && !body.conversation) {
+      check(
+        releases.some((x) => x.manifest.type === "skill"),
+        "请配置此阶段的 Skill",
+        409,
+      );
+      if (body.kind === "prototype")
+        check(
+          releases.some((x) => x.manifest.type === "style"),
+          "请配置风格 Skill",
+          409,
+        );
+      if (body.kind === "prd")
+        check(
+          releases.some((x) => x.manifest.type === "template"),
+          "请配置 PRD 模板",
+          409,
+        );
+      check(
+        releases.filter((x) => x.manifest.type === "skill").length === 1,
+        "每阶段只能选择一个执行 Skill",
+      );
+      check(
+        releases.every(
+          (x) =>
+            x.manifest.type === "skill" ||
+            (body.kind === "prototype" && x.manifest.type === "style") ||
+            (body.kind === "prd" && x.manifest.type === "template"),
+        ),
+        "所选扩展类型与阶段不匹配",
+      );
+      if (body.kind === "prototype")
+        check(
+          releases.filter((x) => x.manifest.type === "style").length === 1,
+          "原型只能选择一个风格",
+        );
+      if (body.kind === "prd")
+        check(
+          releases.filter((x) => x.manifest.type === "template").length === 1,
+          "PRD 只能选择一个模板",
+        );
+    }
 
     const all = this.s.all("knowledge").filter((k) => !k.deletedAt);
     const linkedIds = this.s
@@ -180,7 +243,11 @@ export class Tasks {
       waiver: r.waiver,
       scope: body.scope || "layout",
       selection: body.selection || "",
-      ...resolveAssistant(system, p.defaults, { ...body, executor: "codex" }),
+      ...resolveAssistant(
+        system,
+        p.defaults,
+        body.conversation ? { ...body, executor: "codex" } : body,
+      ),
       requirement: { ...r },
       versions: this.domain
         .versions(id)
@@ -253,11 +320,11 @@ export class Tasks {
       };
     if (name === "read_resource") {
       const r = snap.releases.find((x: any) => x.id === args.releaseId);
-      check(r, "资源不在任务冻结资源内", 403);
+      check(r, "资源不在任务锁定扩展范围内", 403);
       let p = args.path;
       if (!r.files[p])
         p = posix.normalize(posix.join(posix.dirname(r.main), p));
-      check(!p.startsWith("../") && r.files[p], "资源不在此任务内", 403);
+      check(!p.startsWith("../") && r.files[p], "资源不在此扩展范围内", 403);
       if (/\.(png|jpe?g|webp|gif)$/.test(p)) {
         const ext = extname(p).slice(1);
         return {
