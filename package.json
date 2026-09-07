@@ -1,0 +1,43 @@
+{
+  "name": "game-prd-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=.env --import tsx server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "start": "node --env-file-if-exists=.env --import tsx server/index.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.263",
+    "@openai/codex-sdk": "0.153.4",
+    "express": "5.2.1",
+    "gray-matter": "4.0.3",
+    "lucide-react": "0.468.0",
+    "mammoth": "1.12.2",
+    "multer": "2.3.0",
+    "pdf-parse": "2.4.5",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "yauzl": "3.4.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/express": "5.0.6",
+    "@types/multer": "2.2.0",
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@types/yauzl": "2.10.3",
+    "prettier": "3.9.6",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3",
+    "vite": "7.3.6"
+  }
+}
