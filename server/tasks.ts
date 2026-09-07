@@ -11,6 +11,7 @@ import {
 import { Extensions } from "./extensions.ts";
 import { Knowledge } from "./knowledge.ts";
 import { type AgentRuntime, type AgentHost } from "./agent.ts";
+
 export function patchContent(
   base: string,
   patches: { search: string; replace: string }[],
@@ -44,6 +45,7 @@ export function patchContent(
   }
   return out;
 }
+
 export class Tasks {
   running = new Map<string, AbortController>();
   constructor(
@@ -53,6 +55,7 @@ export class Tasks {
     public knowledge: Knowledge,
     public runtime: AgentRuntime,
   ) {}
+
   recover() {
     for (const t of this.s
       .all("task")
@@ -67,6 +70,7 @@ export class Tasks {
       });
     }
   }
+
   create(id: string, body: any) {
     const r = this.s.get<Requirement>("requirement", id);
     if (!body.chatOnly) this.domain.gate(r, body.kind);
@@ -80,60 +84,55 @@ export class Tasks {
       "此需求已有运行任务，请等待或取消",
       409,
     );
+
     if (body.conversation) {
-      for (const q of this.s
-        .all("question")
-        .filter((q) => q.requirementId === id && q.status === "open")) {
-        this.s.put("question", {
-          ...q,
-          status: "answered",
-          answer: body.prompt,
+      const waiting = this.s
+        .all("task")
+        .filter(
+          (t) => t.requirementId === id && t.status === "waiting",
+        )
+        .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+      if (waiting) {
+        for (const q of this.s
+          .all("question")
+          .filter(
+            (q) => q.taskId === waiting.id && q.status === "open",
+          )) {
+          this.s.put("question", {
+            ...q,
+            status: "answered",
+            answer: body.prompt,
+          });
+        }
+        this.s.put("task", {
+          ...waiting,
+          status: "completed",
+          progress: 100,
+          updatedAt: now(),
         });
-        const prior = this.s.get("task", q.taskId);
-        if (prior.status === "waiting")
-          this.s.put("task", { ...prior, status: "completed", progress: 100 });
       }
     }
+
     const system = this.s.get("settings", "system");
     const p = this.s.get("project", r.projectId);
-    const preferences = this.s.get("requirement", id).assistantDefaults || {};
-    const defaults = { ...system.defaults, ...p.defaults, ...preferences, ...body.settings };
-    const chosen = body.chatOnly ? [] : body.skillIds?.length
-      ? body.skillIds
-      : [
-          preferences.skills?.[body.kind] || p.defaults?.skills?.[body.kind] ||
-            system.defaults.skills?.[body.kind],
-        ].filter(Boolean);
-    if (body.kind === "prototype")
-      chosen.push(body.styleId || defaults.styleId);
-    if (body.kind === "prd")
-      chosen.push(body.templateId || defaults.templateId);
+
+    // Stage behavior is fixed in agentPrompt. The only user-editable model resource
+    // is the global PRD template, retained in the legacy release store for migration
+    // compatibility but no longer exposed as an extension system.
+    const chosen =
+      !body.chatOnly && body.kind === "prd" && system.defaults?.templateId
+        ? [system.defaults.templateId]
+        : [];
     const releases = [...new Set(chosen)]
       .filter(Boolean)
       .map((x) => this.ext.select(x as string, r.projectId, body.kind));
-    check(
-      body.chatOnly || releases.some((x) => x.manifest.type === "skill"),
-      "请配置此阶段的 Skill",
-      409,
-    );
-    if (body.kind === "prototype")
-      check(
-        releases.some((x) => x.manifest.type === "style"),
-        "请配置风格 Skill",
-        409,
-      );
-    if (body.kind === "prd")
+    if (!body.chatOnly && body.kind === "prd")
       check(
         releases.some((x) => x.manifest.type === "template"),
-        "请配置 PRD 模板",
+        "全局 PRD 模板不可用，请在设置中恢复默认模板",
         409,
       );
-    if (!body.chatOnly) {
-      check(releases.filter((x) => x.manifest.type === "skill").length === 1, "每阶段只能选择一个执行 Skill");
-      check(releases.every((x) => x.manifest.type === "skill" || (body.kind === "prototype" && x.manifest.type === "style") || (body.kind === "prd" && x.manifest.type === "template")), "所选扩展类型与阶段不匹配");
-      if (body.kind === "prototype") check(releases.filter((x) => x.manifest.type === "style").length === 1, "原型只能选择一个风格");
-      if (body.kind === "prd") check(releases.filter((x) => x.manifest.type === "template").length === 1, "PRD 只能选择一个模板");
-    }
+
     const all = this.s.all("knowledge").filter((k) => !k.deletedAt);
     const linkedIds = this.s
       .all("knowledgeLink")
@@ -161,20 +160,27 @@ export class Tasks {
     const knowledge = [
       ...new Map([...relevant, ...explicit].map((k) => [k.id, k])).values(),
     ];
+
     const snapshot = {
       releases,
       conversation: !!body.conversation,
       stage: body.stage || body.kind,
       action: body.action || "discuss",
-      reviewRoles: body.kind === "review" ? reviewRoles : undefined,
+      reviewRoles:
+        body.kind === "review"
+          ? body.reviewRoles?.length
+            ? body.reviewRoles
+            : reviewRoles
+          : undefined,
       chatOnly: !!body.chatOnly,
+      previewOnly: !!body.previewOnly,
       knowledge,
       heads: { ...r.heads },
       confirmed: { ...r.confirmed },
       waiver: r.waiver,
       scope: body.scope || "layout",
       selection: body.selection || "",
-      ...resolveAssistant(system, p.defaults, body),
+      ...resolveAssistant(system, p.defaults, { ...body, executor: "codex" }),
       requirement: { ...r },
       versions: this.domain
         .versions(id)
@@ -186,7 +192,7 @@ export class Tasks {
       messages: this.s
         .all("message")
         .filter((x) => x.requirementId === id)
-        .slice(-20),
+        .slice(-30),
     };
     const t = {
       id: uid(),
@@ -213,6 +219,7 @@ export class Tasks {
     setImmediate(() => void this.run(t.id));
     return t;
   }
+
   event(id: string, text: string) {
     if (this.s.closed) return;
     const t = this.s.get("task", id);
@@ -223,6 +230,7 @@ export class Tasks {
     t.updatedAt = now();
     this.s.put("task", t);
   }
+
   async dispatch(id: string, name: string, args: any) {
     const t = this.s.get("task", id);
     check(t.status === "running", "任务已停止，不能再操作", 409);
@@ -245,11 +253,11 @@ export class Tasks {
       };
     if (name === "read_resource") {
       const r = snap.releases.find((x: any) => x.id === args.releaseId);
-      check(r, "资源不在任务锁定扩展内", 403);
+      check(r, "资源不在任务冻结资源内", 403);
       let p = args.path;
       if (!r.files[p])
         p = posix.normalize(posix.join(posix.dirname(r.main), p));
-      check(!p.startsWith("../") && r.files[p], "资源不在此扩展内", 403);
+      check(!p.startsWith("../") && r.files[p], "资源不在此任务内", 403);
       if (/\.(png|jpe?g|webp|gif)$/.test(p)) {
         const ext = extname(p).slice(1);
         return {
@@ -345,6 +353,24 @@ export class Tasks {
     }
     check(false, "未授权业务工具", 403);
   }
+
+  private assertUpstreamCurrent(t: any) {
+    const r = this.s.get<Requirement>("requirement", t.requirementId);
+    for (const key of t.kind === "prd"
+      ? ["requirement", "prototype"]
+      : t.kind === "prototype"
+        ? ["requirement"]
+        : t.kind === "review"
+          ? ["prd"]
+          : [])
+      check(
+        r.heads[key as ArtifactKind] === t.snapshot.heads[key],
+        "上游基础版本发生变化，候选已保留",
+        409,
+      );
+    return r;
+  }
+
   async run(id: string) {
     if (this.s.closed) return;
     const t = this.s.get("task", id);
@@ -362,10 +388,19 @@ export class Tasks {
         progress: (msg) => this.event(id, msg),
         session: (sessionId) => {
           const cur = this.s.get("task", id);
-          this.s.put("task", { ...cur, sessionId, sessionIds: [...new Set([...(cur.sessionIds || []), sessionId])] });
+          this.s.put("task", {
+            ...cur,
+            sessionId,
+            sessionIds: [
+              ...new Set([...(cur.sessionIds || []), sessionId]),
+            ],
+          });
         },
       };
-      const execute = t.snapshot.reviewRoles ? (input: any, host: AgentHost) => runReviewPanel(this.runtime, input, host) : this.runtime.run.bind(this.runtime);
+      const execute = t.snapshot.reviewRoles
+        ? (input: any, host: AgentHost) =>
+            runReviewPanel(this.runtime, input, host)
+        : this.runtime.run.bind(this.runtime);
       const result = await execute(
         {
           id,
@@ -380,12 +415,34 @@ export class Tasks {
       );
       const current = this.s.get("task", id);
       if (controller.signal.aborted || current.status === "cancelled") return;
-      if (t.snapshot.chatOnly || (t.snapshot.conversation && !current.candidate && !this.s.all("question").some((q) => q.taskId === id && q.status === "open"))) {
-        check(typeof result === "string" && result.trim(), "Codex 未返回回复，请重试", 422);
+      if (
+        t.snapshot.chatOnly ||
+        (t.snapshot.conversation &&
+          !current.candidate &&
+          !this.s
+            .all("question")
+            .some((q) => q.taskId === id && q.status === "open"))
+      ) {
+        check(
+          typeof result === "string" && result.trim(),
+          "Codex 未返回回复，请重试",
+          422,
+        );
         this.s.tx(() => {
-          this.s.put("message", { id: uid(), requirementId: t.requirementId,
-            role: "assistant", content: result, taskId: id, createdAt: now() });
-          this.s.put("task", { ...current, status: "completed", progress: 100, updatedAt: now() });
+          this.s.put("message", {
+            id: uid(),
+            requirementId: t.requirementId,
+            role: "assistant",
+            content: result,
+            taskId: id,
+            createdAt: now(),
+          });
+          this.s.put("task", {
+            ...current,
+            status: "completed",
+            progress: 100,
+            updatedAt: now(),
+          });
         });
         return;
       }
@@ -393,7 +450,12 @@ export class Tasks {
         .all("question")
         .some((q) => q.taskId === id && q.status === "open");
       if (open && !current.candidate) {
-        this.s.put("task", { ...current, status: "waiting", progress: 50 });
+        this.s.put("task", {
+          ...current,
+          status: "waiting",
+          progress: 50,
+          updatedAt: now(),
+        });
         return;
       }
       check(
@@ -401,19 +463,29 @@ export class Tasks {
         "Agent 未返回有效成果；可查看回复后调整任务并重试",
         422,
       );
-      const r = this.s.get<Requirement>("requirement", t.requirementId);
-      for (const key of t.kind === "prd"
-        ? ["requirement", "prototype"]
-        : t.kind === "prototype"
-          ? ["requirement"]
-          : t.kind === "review"
-            ? ["prd"]
-            : [])
-        check(
-          r.heads[key as ArtifactKind] === t.snapshot.heads[key],
-          "上游基础版本发生变化，候选已保留",
-          409,
-        );
+      this.assertUpstreamCurrent(t);
+
+      if (t.snapshot.previewOnly) {
+        this.s.put("task", {
+          ...current,
+          status: "completed",
+          progress: 100,
+          candidateReady: true,
+          updatedAt: now(),
+        });
+        this.s.put("message", {
+          id: uid(),
+          requirementId: t.requirementId,
+          role: "assistant",
+          content:
+            current.candidate.summary ||
+            "修改候选已经生成。请先预览，再决定应用或放弃。",
+          taskId: id,
+          createdAt: now(),
+        });
+        return;
+      }
+
       const v = this.domain.save(
         t.requirementId,
         t.kind,
@@ -453,6 +525,50 @@ export class Tasks {
       this.running.delete(id);
     }
   }
+
+  applyCandidate(id: string) {
+    const t = this.s.get("task", id);
+    check(t.snapshot?.previewOnly, "此任务不是预览候选", 409);
+    check(t.candidate && t.candidateReady, "候选尚未生成", 409);
+    check(!t.resultId, "候选已经应用", 409);
+    this.assertUpstreamCurrent(t);
+    const v = this.domain.save(
+      t.requirementId,
+      t.kind,
+      t.candidate.content,
+      t.base,
+      t.candidate.metadata,
+      "agent",
+      t.id,
+    );
+    this.s.put("task", {
+      ...t,
+      resultId: v.id,
+      candidateReady: false,
+      appliedAt: now(),
+      updatedAt: now(),
+    });
+    this.s.audit("user", "task.candidate.apply", t.id, {
+      versionId: v.id,
+    });
+    return v;
+  }
+
+  discardCandidate(id: string) {
+    const t = this.s.get("task", id);
+    check(t.snapshot?.previewOnly, "此任务不是预览候选", 409);
+    check(t.candidate && !t.resultId, "没有可放弃的候选", 409);
+    this.s.put("task", {
+      ...t,
+      candidate: null,
+      candidateReady: false,
+      discardedAt: now(),
+      updatedAt: now(),
+    });
+    this.s.audit("user", "task.candidate.discard", t.id);
+    return this.s.get("task", t.id);
+  }
+
   cancel(id: string) {
     const t = this.s.get("task", id);
     check(
@@ -460,10 +576,15 @@ export class Tasks {
       "任务已结束",
       409,
     );
-    this.s.put("task", { ...t, status: "cancelled", updatedAt: now() });
+    this.s.put("task", {
+      ...t,
+      status: "cancelled",
+      updatedAt: now(),
+    });
     this.running.get(id)?.abort();
     return this.s.get("task", id);
   }
+
   retry(id: string) {
     const t = this.s.get("task", id);
     check(
@@ -502,6 +623,8 @@ export class Tasks {
       progress: 0,
       error: null,
       candidate: null,
+      candidateReady: false,
+      resultId: null,
       sessionId: null,
       events: [],
       prompt: t.prompt + "\n" + answers,
@@ -513,8 +636,11 @@ export class Tasks {
     return copy;
   }
 }
+
 export function redact(s: string) {
   for (const key of ["WORKBENCH_ANTHROPIC_API_KEY", "WORKBENCH_CODEX_API_KEY"])
     if (process.env[key]) s = s.split(process.env[key]!).join("[redacted]");
-  return s.replace(/sk-[a-zA-Z0-9_-]{12,}/g, "[redacted]").slice(0, 4000);
+  return s
+    .replace(/sk-[a-zA-Z0-9_-]{12,}/g, "[redacted]")
+    .slice(0, 4000);
 }
