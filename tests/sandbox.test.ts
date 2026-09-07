@@ -95,3 +95,52 @@ test(
     }
   },
 );
+
+test(
+  "SDK schema is copied into the sandbox and launcher runs from the authorized task directory",
+  { skip: process.platform !== "darwin" },
+  async () => {
+    const { createCodexLauncher } = await import("../server/codex-launcher.ts");
+    const { tmpdir } = await import("node:os");
+    const { readFile } = await import("node:fs/promises");
+    const root = await realpath(
+        await mkdtemp(join(tmpdir(), "launcher-test-")),
+      ),
+      work = join(root, "work"),
+      home = join(root, "home");
+    const schemaDir = await mkdtemp(join(tmpdir(), "codex-output-schema-"));
+    await mkdir(work);
+    await mkdir(home);
+    await writeFile(join(schemaDir, "schema.json"), '{"type":"object"}');
+    try {
+      const binary = await realpath("/usr/bin/true");
+      const launcher = await createCodexLauncher(
+        work,
+        binary,
+        seatbeltProfile(work, home, binary),
+      );
+      execFileSync(
+        launcher,
+        ["--output-schema", join(schemaDir, "schema.json")],
+        {
+          cwd: root,
+          env: { PATH: "/usr/bin:/bin", HOME: home, CODEX_HOME: home },
+          timeout: 10000,
+          stdio: "pipe",
+        },
+      );
+      assert.equal(
+        await readFile(join(work, "output-schema.json"), "utf8"),
+        '{"type":"object"}',
+      );
+      assert.throws(() =>
+        execFileSync(launcher, ["--output-schema", join(root, "outside")], {
+          stdio: "pipe",
+        }),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(schemaDir, { recursive: true, force: true });
+    }
+  },
+);

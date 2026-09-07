@@ -51,6 +51,8 @@ test("subscription login lifecycle and isolated token refresh (fake CLI, no onli
     )
       await new Promise((r) => setTimeout(r, 20));
     assert.equal((await codexStatus(root)).state, "configured");
+    assert.equal((await startCodexLogin(root)).state, "configured");
+    assert.notEqual((await codexStatus(root)).login?.state, "waiting");
     const taskHome = join(root, "codex-home", "task-a");
     await withCodexAuth(
       root,

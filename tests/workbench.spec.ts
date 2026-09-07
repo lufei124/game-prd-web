@@ -61,7 +61,7 @@ test("browser full flow: create project, knowledge, confirm, two clickable style
   await page
     .getByRole("textbox", { name: "给产品助手的任务" })
     .fill("生成可点击的奖励领取原型");
-  await page.getByRole("button", { name: "开始任务", exact: true }).click();
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
   const frame = page.frameLocator('iframe[title="交互原型预览"]');
   await frame.getByRole("button", { name: "领取奖励", exact: true }).click();
   await expect(frame.getByText("领取成功", { exact: true })).toBeVisible();
@@ -70,14 +70,10 @@ test("browser full flow: create project, knowledge, confirm, two clickable style
     .click();
   await expect(frame.getByText("网络异常", { exact: true })).toBeVisible();
   await frame.getByRole("button", { name: "重试", exact: true }).click();
-  await page.getByRole("button", { name: "任务配置", exact: true }).click();
-  await page
-    .getByLabel("视觉风格", { exact: true })
-    .selectOption({ label: "墨色编辑风格" });
-  await page
-    .getByRole("textbox", { name: "给产品助手的任务" })
-    .fill("切换成墨色风格，保留交互");
-  await page.getByRole("button", { name: "开始任务", exact: true }).click();
+  await page.getByText("各阶段 Skill、风格与模板", { exact: true }).click();
+  await page.getByLabel("原型风格（单选）", { exact: true }).selectOption({ label: "墨色编辑风格" });
+  await page.getByRole("textbox", { name: "给产品助手的任务" }).fill("应用选择的风格，保留交互");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
   await expect(frame.locator("body")).toHaveCSS(
     "background-color",
     "rgb(32, 37, 33)",
@@ -111,7 +107,7 @@ test("browser full flow: create project, knowledge, confirm, two clickable style
   await page
     .getByRole("textbox", { name: "给产品助手的任务" })
     .fill("根据已确认原型撰写研发 PRD");
-  await page.getByRole("button", { name: "开始任务", exact: true }).click();
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
   await expect(
     page.getByRole("textbox", { name: "PRD 文档编辑器" }),
   ).toContainText("");
@@ -124,7 +120,7 @@ test("browser full flow: create project, knowledge, confirm, two clickable style
   await page
     .getByRole("textbox", { name: "给产品助手的任务" })
     .fill("评审当前 PRD");
-  await page.getByRole("button", { name: "开始任务", exact: true }).click();
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
   await expect(
     page.getByText("本次评审未报告问题，仍需用户确认终稿。"),
   ).toBeVisible();
@@ -261,21 +257,28 @@ test("Codex defaults, model/depth persistence, Chinese Skills and project trash 
     .getByRole("dialog")
     .getByRole("button", { name: "保存", exact: true })
     .click();
-  await page.getByRole("button", { name: "任务配置", exact: true }).click();
-  await expect(page.getByLabel("产品助手", { exact: true })).toHaveValue(
-    "codex",
-  );
-  await page.getByLabel("任务模型", { exact: true }).fill("gpt-5.6-sol");
-  await page.getByLabel("任务思考深度", { exact: true }).selectOption("high");
+  await page
+    .getByRole("button", { name: "选择本次任务模型与思考深度" })
+    .click();
+  await page
+    .getByRole("dialog", { name: "本次任务模型" })
+    .getByRole("button", { name: "5.6 sol", exact: true })
+    .click();
+  await page
+    .getByRole("dialog", { name: "本次任务模型" })
+    .getByRole("button", { name: "高", exact: true })
+    .click();
   await page
     .getByRole("textbox", { name: "给产品助手的任务" })
     .fill("整理需求");
-  await page.getByRole("button", { name: "开始任务", exact: true }).click();
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await page.getByText("执行状态", { exact: true }).click();
   await page.getByText("执行记录与固定版本", { exact: true }).click();
   await expect(
     page.getByText("思考深度：high", { exact: false }),
   ).toBeVisible();
   await page.reload();
+  await page.getByText("执行状态", { exact: true }).click();
   await page.getByText("执行记录与固定版本", { exact: true }).click();
   await expect(
     page.getByText("思考深度：high", { exact: false }),
@@ -417,14 +420,9 @@ test("central assistant layout, subscription login UI and permanent recycle-bin 
   ).not.toBeVisible();
   await expect(page.locator(".composer-model")).toContainText("6 astra");
   await expect(page.locator(".composer-model")).toContainText("低");
-  await page.getByRole("button", { name: "任务配置", exact: true }).click();
-  await expect(page.getByLabel("任务模型", { exact: true })).toHaveValue(
-    "gpt-6-astra",
-  );
-  await expect(page.getByLabel("任务思考深度", { exact: true })).toHaveValue(
-    "low",
-  );
-  await page.getByRole("button", { name: "任务配置", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "任务配置", exact: true }),
+  ).toHaveCount(0);
   await page
     .getByRole("textbox", { name: "给产品助手的任务" })
     .fill("梳理这个需求的页面流程与验收标准");
@@ -516,4 +514,209 @@ test("central assistant layout, subscription login UI and permanent recycle-bin 
   await expect(
     page.getByRole("link", { name: "打开官方登录页面 ↗" }),
   ).toHaveAttribute("href", "https://auth.openai.com/codex/device");
+});
+
+test("knowledge folders, requirement materials and @ references persist (Mock)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "新建项目", exact: true }).click();
+  await dialog(page, "项目名称", "目录知识测试");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "保存", exact: true })
+    .click();
+  await page.getByRole("button", { name: "知识库", exact: true }).click();
+  await page.getByRole("button", { name: "新建目录", exact: true }).click();
+  await dialog(page, "目录名称", "产品规范");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "保存", exact: true })
+    .click();
+  await page
+    .getByRole("navigation", { name: "知识库目录" })
+    .getByRole("button", { name: "产品规范", exact: true })
+    .click();
+  await page.getByRole("button", { name: "文本", exact: true }).click();
+  await dialog(page, "资料名称", "登录规则");
+  await dialog(page, "内容", "登录失败保留输入内容。");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "保存", exact: true })
+    .click();
+  await expect(page.getByText("登录规则.md", { exact: true })).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "知识库", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "知识库目录" })
+    .getByRole("button", { name: "产品规范", exact: true })
+    .click();
+  await expect(page.getByText("登录规则.md", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "目录知识测试", exact: true }).click();
+  await page.getByRole("button", { name: "新建需求", exact: true }).click();
+  await dialog(page, "需求名称", "登录界面");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "保存", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "添加需求资料", exact: true })
+    .first()
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByLabel("知识库文件", { exact: true })
+    .selectOption({ label: "/产品规范 / 登录规则.md" });
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "保存", exact: true })
+    .click();
+  await expect(
+    page.locator(".material-entry").getByText("登录规则.md", { exact: true }),
+  ).toBeVisible();
+  const input = page.getByRole("textbox", { name: "给产品助手的任务" });
+  await input.fill("参考 @登录");
+  await page.getByRole("option", { name: /登录规则.md/ }).click();
+  await expect(page.locator(".reference-chips")).toContainText("登录规则.md");
+  await page
+    .getByRole("textbox", { name: "需求卡编辑器" })
+    .fill("# 登录\n登录失败保留输入");
+  await page.getByRole("button", { name: "保存版本", exact: true }).click();
+  let submitted: any;
+  await page.route("**/api/requirements/*/chat", async (route) => {
+    submitted = route.request().postDataJSON();
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect.poll(() => submitted?.referenceIds?.length).toBe(1);
+  await page.getByRole("button", { name: "知识库", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "知识库目录" })
+    .getByRole("button", { name: "产品规范", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "删除文件 登录规则.md", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "确认删除", exact: true })
+    .click();
+  await expect(page.getByText("登录规则.md", { exact: true })).toHaveCount(0);
+  await page.reload();
+  await page.getByRole("button", { name: "知识库", exact: true }).click();
+  await expect(page.getByText("提案", { exact: true })).toHaveCount(0);
+});
+
+test("configured Codex requires logout before another login (Mock)", async ({
+  page,
+}) => {
+  let configured = true;
+  let starts = 0;
+  await page.route("**/api/status", (route) =>
+    route.fulfill({
+      json: {
+        codex: {
+          state: configured ? "configured" : "unconfigured",
+          mode: "subscription",
+          login: {
+            state: "waiting",
+            code: "STALE-CODE",
+            url: "https://auth.openai.com/codex/device",
+          },
+        },
+        claude: { state: "unconfigured" },
+        feishu: { state: "unconfigured" },
+      },
+    }),
+  );
+  await page.route("**/api/codex/logout", (route) => {
+    configured = false;
+    return route.fulfill({ json: {} });
+  });
+  await page.route("**/api/codex/login", (route) => {
+    starts++;
+    return route.fulfill({ json: {} });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "设置", exact: true }).first().click();
+  await expect(page.getByText("ChatGPT 已登录 · 真实调用待实测")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "使用 ChatGPT 登录", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByText("STALE-CODE", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByText("独立登录目录：", { exact: false }),
+  ).not.toBeVisible();
+  expect(starts).toBe(0);
+  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await page.route("**/api/status", (route) =>
+    route.fulfill({
+      json: {
+        codex: { state: "unconfigured", mode: "subscription", login: null },
+        claude: { state: "unconfigured" },
+        feishu: { state: "unconfigured" },
+      },
+    }),
+  );
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "确认", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "使用 ChatGPT 登录", exact: true })
+    .click();
+  expect(configured).toBe(false);
+  expect(starts).toBe(1);
+});
+
+test("Codex chat sends messages and survives reload (Mock)", async ({ page }) => {
+  await page.goto("/");
+  const p = await post(page, "/projects", { name: "聊天验收" });
+  await post(page, "/requirements", { projectId: p.id, name: "聊天需求", mode: "full" });
+  await page.reload();
+  await page.getByText("聊天验收", { exact: true }).first().click();
+  await page.getByText("聊天需求", { exact: true }).first().click();
+  await expect(page.getByRole("button", { name: "Codex 聊天", exact: true })).toHaveCount(0);
+  await expect(page.locator(".agent-panel .task-card")).toHaveCount(0);
+  await page.getByRole("textbox", { name: "给产品助手的任务" }).fill("你好 Codex");
+  const input = page.getByRole("textbox", { name: "给产品助手的任务" });
+  await input.press("Shift+Enter");
+  await expect(input).toHaveValue("你好 Codex\n");
+  await input.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true });
+  await expect(input).toHaveValue("你好 Codex\n");
+  await expect(page.getByText("Mock 产品助手：你好，有什么想法？", { exact: true })).toHaveCount(0);
+  await input.press("Enter");
+  await expect(page.getByText("Mock 产品助手：你好，有什么想法？", { exact: true })).toBeVisible();
+  await input.fill("我想做一个奖励功能");
+  await input.press("Enter");
+  await expect(page.getByText("奖励面向哪些用户？", { exact: true })).toBeVisible();
+  await input.fill("面向每天登录的用户");
+  await input.press("Enter");
+  await expect(page.getByRole("textbox", { name: "需求卡编辑器" })).toHaveValue(/用户每天领取一次奖励/);
+  await expect(page.locator(".agent-panel .task-card")).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText("Mock 产品助手：你好，有什么想法？", { exact: true })).toBeVisible();
+});
+
+test("stage configuration separates Skills, one style and PRD template and persists (Mock)", async ({ page }) => {
+  await page.goto("/");
+  const p = await post(page, "/projects", { name: "阶段配置验收" });
+  const r = await post(page, "/requirements", { projectId: p.id, name: "流程配置" });
+  await page.evaluate(({ p, r }) => { localStorage.setItem("forge-project", p.id); localStorage.setItem("forge-requirement", r.id); }, { p, r });
+  await page.reload();
+  await page.getByText("各阶段 Skill、风格与模板", { exact: true }).click();
+  for (const stage of ["需求澄清", "原型生成", "PRD 编写", "PRD 评审"]) {
+    await expect(page.getByLabel(stage + " Skill", { exact: true })).toBeVisible();
+  }
+  await page.getByLabel("原型风格（单选）", { exact: true }).selectOption({ label: "低保真线框风格" });
+  await page.getByText("查看当前 PRD 模板", { exact: true }).click();
+  await expect(page.locator(".stage-settings pre")).toContainText("验收标准");
+  await page.reload();
+  await page.getByText("各阶段 Skill、风格与模板", { exact: true }).click();
+  await expect(page.getByLabel("原型风格（单选）", { exact: true }).locator("option:checked")).toHaveText("低保真线框风格");
+  await page.getByRole("textbox", { name: "给产品助手的任务" }).fill("PRD 和原型是什么？");
+  const request = page.waitForRequest(r => r.url().endsWith("/chat") && r.method() === "POST");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  expect((await request).postDataJSON().stage).toBe("requirement");
+  await expect(page.locator(".conversation-stage b")).toHaveText("需求澄清");
 });

@@ -180,6 +180,16 @@ export class Domain {
   versions(id: string) {
     return this.s.all<Version>("version").filter((v) => v.requirementId === id);
   }
+  conversationStage(r: Requirement) {
+    if (r.mode === "prototype") return "prototype";
+    if (r.mode === "review") return r.heads.prd ? "review" : "prd";
+    if (r.mode === "publish") return "prd";
+    if (!r.heads.requirement || r.confirmed.requirement !== r.heads.requirement) return "requirement";
+    if (!r.heads.prototype || r.confirmed.prototype !== r.heads.prototype) {
+      if (r.waiver?.requirementVersion !== r.heads.requirement) return "prototype";
+    }
+    return "prd";
+  }
   stage(r: Requirement) {
     if (r.mode === "prototype")
       return r.heads.prototype && r.heads.prototype === r.confirmed.prototype

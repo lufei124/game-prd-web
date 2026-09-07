@@ -124,9 +124,7 @@ export function ModelPicker({
             <button type="submit">应用</button>
           </form>
         </details>
-        <p>
-          仅用于接下来的任务，可用模型取决于账号权限。助手切换在任务配置中设置。
-        </p>
+        <p>仅用于接下来的任务，可用模型取决于账号权限。助手切换在设置中。</p>
       </div>
     </>
   );

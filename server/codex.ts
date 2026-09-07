@@ -1,3 +1,4 @@
+import { createCodexLauncher } from "./codex-launcher.ts";
 import { Codex, type UserInput } from "@openai/codex-sdk";
 import { mkdir, writeFile, readFile, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -18,7 +19,6 @@ import {
   withCodexAuth,
 } from "./codex-auth.ts";
 export { codexStatus } from "./codex-auth.ts";
-const shellQuote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 export function seatbeltProfile(work: string, home: string, binary: string) {
   const q = (s: string) => JSON.stringify(s);
   return `(version 1)
@@ -30,6 +30,7 @@ export function seatbeltProfile(work: string, home: string, binary: string) {
 (allow file-read-data (require-all (literal "/") (vnode-type DIRECTORY)))
 (allow file-read* file-map-executable (subpath "/System") (subpath "/usr/lib") (subpath "/usr/share") (subpath "/Library/Apple") (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random") (literal "/private/etc/resolv.conf") (literal "/private/etc/hosts") (literal "/private/etc/ssl/cert.pem") (subpath ${q(work)}) (subpath ${q(home)}) (literal ${q(binary)}))
 (allow file-write* (subpath ${q(work)}) (subpath ${q(home)}) (literal "/dev/null"))
+(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))
 (allow network-outbound (remote tcp "*:443"))
 (deny network-outbound (remote ip "localhost:*"))
 `;
@@ -63,11 +64,7 @@ export class CodexExecutor implements AgentRuntime {
       await realpath(home),
       binary,
     );
-    await writeFile(
-      wrapper,
-      `#!/bin/sh\nexec /usr/bin/sandbox-exec -p ${shellQuote(profile)} ${shellQuote(binary)} "$@"\n`,
-      { mode: 0o700 },
-    );
+    await createCodexLauncher(await realpath(work), binary, profile);
     const codex = this.client({
       codexPathOverride: wrapper,
       apiKey:
@@ -121,7 +118,10 @@ export class CodexExecutor implements AgentRuntime {
     }
     const prompt =
       agentPrompt(input) +
-      `\n本次使用 Codex 结构化输出传输，以上工具由宿主预读，下方是读取结果。不要尝试调用 MCP、Shell 或文件工具。输出 {content,metadataJson,summary,patches,question}：metadataJson 是 metadata 的 JSON 字符串；无需提问时 question 为空字符串；需要澄清时填写 question 并将 content 留空。宿主仅会提交候选或记录问题，不能确认、删除、入库或发布。\n上下文：${JSON.stringify(context)}\n选定 Skill 的直接引用：${JSON.stringify(resources)}\n冻结知识：${JSON.stringify(input.snapshot.knowledge.filter((x: any) => x.status === "parsed"))}`;
+      (input.snapshot.chatOnly
+        ? `\n上下文：${JSON.stringify(context)}\n资料：${JSON.stringify(input.snapshot.knowledge.filter((x: any) => x.status === "parsed"))}`
+        :
+      `\n本次使用 Codex 结构化输出传输，以上工具由宿主预读，下方是读取结果。不要尝试调用 MCP、Shell 或文件工具。输出 {content,metadataJson,summary,patches,question}：metadataJson 是 metadata 的 JSON 字符串；无需提问时 question 为空字符串；需要澄清时填写 question；需求澄清不足时先填写 question 提问、content 留空；关键需求澄清后在 content 提交完整需求卡。普通聊天仅填写 summary，content 和 question 留空、patches 为空数组、metadataJson 为 {}。summary 不要重复成果正文，成果由右侧面板展示。宿主仅会提交候选或记录问题，不能确认、删除、入库或发布。\n上下文：${JSON.stringify(context)}\n选定 Skill 的直接引用：${JSON.stringify(resources)}\n冻结知识：${JSON.stringify(input.snapshot.knowledge.filter((x: any) => x.status === "parsed"))}`);
     const request: UserInput[] = [{ type: "text", text: prompt }];
     for (const k of input.snapshot.knowledge.filter(
       (k: any) => k.status === "image",
@@ -133,11 +133,11 @@ export class CodexExecutor implements AgentRuntime {
       request.push({ type: "local_image", path: ref });
     }
     host.progress(
-      `Codex 正在处理${input.kind}任务 · ${input.model} · ${input.snapshot.reasoningEffort}`,
+      `Codex 正在思考 · ${input.model} · ${input.snapshot.reasoningEffort}`,
     );
     const result = await thread.runStreamed(request, {
       signal: input.signal,
-      outputSchema: {
+      outputSchema: input.snapshot.chatOnly ? undefined : {
         type: "object",
         properties: {
           content: { type: "string" },
@@ -173,7 +173,7 @@ export class CodexExecutor implements AgentRuntime {
       if (event.type === "error") throw new Error(event.message);
     }
     input.signal.throwIfAborted();
-    return submitCodexOutput(output, host);
+    return input.snapshot.chatOnly ? output : submitCodexOutput(output, host);
   }
 }
 export class RuntimeRouter implements AgentRuntime {
@@ -208,14 +208,14 @@ export async function submitCodexOutput(raw: string, host: AgentHost) {
     })
     .strict()
     .parse(JSON.parse(raw));
-  if (output.question.trim())
-    await host.read("ask_question", { question: output.question });
-  else
+  if (output.content.trim() || output.patches.length)
     await host.read("propose_artifact", {
       content: output.content,
       metadata: JSON.parse(output.metadataJson),
       summary: output.summary,
       patches: output.patches,
     });
+  if (output.question.trim())
+    await host.read("ask_question", { question: output.question });
   return output.summary;
 }

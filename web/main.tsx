@@ -1,3 +1,4 @@
+import { StageSettings } from "./StageSettings";
 import React, { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -41,6 +42,8 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import "./style.css";
+import { KnowledgeBrowser, folderPath } from "./KnowledgeBrowser";
+import { MentionInput } from "./MentionInput";
 import { ModelPicker } from "./ModelPicker";
 type Field = {
   name: string;
@@ -166,14 +169,16 @@ function App() {
     [styleId, setStyleId] = useState(""),
     [skillId, setSkillId] = useState(""),
     [templateId, setTemplateId] = useState(""),
-    [scope, setScope] = useState("visual"),
+    [scope, setScope] = useState("layout"),
     [executor, setExecutor] = useState(""),
     [taskModel, setTaskModel] = useState(""),
     [reasoningEffort, setReasoningEffort] = useState(""),
+    [knowledgeFolder, setKnowledgeFolder] = useState<string | null>(null),
     [referenceIds, setReferenceIds] = useState<string[]>([]),
     [showConfig, setShowConfig] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const initialLoad = useRef(true);
+  const loadedRequirement = useRef("");
   const reload = async () => {
     const d = await api("/bootstrap");
     setData(d);
@@ -193,10 +198,27 @@ function App() {
     );
   };
   const loadWorkspace = async () => {
-    if (requirementId) setWs(await api("/requirements/" + requirementId));
+    if (requirementId) {
+      const next = await api("/requirements/" + requirementId);
+      if (loadedRequirement.current !== requirementId) {
+        loadedRequirement.current = requirementId;
+        const savedStage = localStorage.getItem("forge-stage:" + requirementId);
+        setKind(savedStage && ["requirement", "prototype", "prd", "review"].includes(savedStage) ? savedStage : next.requirement.conversationStage);
+      }
+      setWs(next);
+    }
   };
   const loadKnowledge = async () => {
-    if (projectId) setKnowledge(await api("/knowledge?projectId=" + projectId));
+    if (projectId) {
+      const next = await api("/knowledge?projectId=" + projectId);
+      setKnowledge(next);
+      setReferenceIds((ids) =>
+        ids.filter((id) => next.items.some((k: any) => k.id === id)),
+      );
+      setKnowledgeFolder((id) =>
+        next.folders.some((f: any) => f.id === id) ? id : null,
+      );
+    }
   };
   const run = async (fn: () => Promise<any>, message = "已保存") => {
     setError("");
@@ -225,6 +247,7 @@ function App() {
   }, []);
   useEffect(() => {
     localStorage.setItem("forge-project", projectId);
+    setKnowledgeFolder(null);
     loadKnowledge().catch((e) => setError(e.message));
     setStyleId("");
     setTemplateId("");
@@ -285,6 +308,10 @@ function App() {
     setEditor(localStorage.getItem(savedKey) ?? version?.content ?? "");
     setSelectedText("");
   }, [savedKey]);
+  useEffect(() => {
+    if (req?.id === requirementId && loadedRequirement.current === requirementId)
+      localStorage.setItem("forge-stage:" + requirementId, kind);
+  }, [kind, req?.id, requirementId]);
   const dirty = editor !== (version?.content || "");
   const setDraft = (v: string) => {
     setEditor(v);
@@ -293,7 +320,7 @@ function App() {
   const selectRequirement = (id: string) => {
     setRequirementId(id);
     setView("projects");
-    setKind("requirement");
+    setKind(localStorage.getItem("forge-stage:" + id) || data?.requirements.find((r: any) => r.id === id)?.conversationStage || "requirement");
   };
   const kinds =
     req?.mode === "prototype"
@@ -455,28 +482,27 @@ function App() {
           kind,
           versionId: version.id,
         });
+        if (req.mode === "full") {
+          setKind(kind === "requirement" ? "prototype" : "prd");
+          setChosenVersion("");
+        }
       },
     );
-  const startTask = () =>
+  const startTask = (action = "discuss") =>
     run(async () => {
-      if (dirty)
-        throw new Error("请先保存手动编辑，再启动 AI 修改，以便锁定基础版本");
-      const text = taskPrompt.trim();
+      if (dirty && editor.trim())
+        await api("/requirements/" + requirementId + "/versions", "POST", {
+          kind,
+          content: editor,
+          base: req.heads[kind] || null,
+          metadata: version?.metadata || {},
+        });
+      const text = taskPrompt.trim() || (action === "generate" ? ({ requirement: "请结合澄清对话和资料整理初步需求卡，关键事实不足时先提问。", prototype: "请根据已确认需求卡生成初版交互原型。", prd: "请根据已确认需求卡和原型，按当前选定模板生成初版 PRD。", review: "请对当前 PRD 发起多视角独立评审，汇总问题。" } as any)[kind] : "");
       if (!text) throw new Error("请描述要生成或修改的内容");
-      const t = await api("/requirements/" + requirementId + "/tasks", "POST", {
-        kind,
+      const t = await api("/requirements/" + requirementId + "/chat", "POST", {
         prompt: text,
-        skillIds: [
-          skillId ||
-            project?.defaults?.skills?.[kind] ||
-            data.settings.defaults.skills?.[kind],
-        ].filter(Boolean),
-        ...(kind === "prototype"
-          ? { styleId: styleId || defaultId("styleId") }
-          : {}),
-        ...(kind === "prd"
-          ? { templateId: templateId || defaultId("templateId") }
-          : {}),
+        stage: kind,
+        action,
         referenceIds,
         scope: kind === "prototype" && version ? scope : "layout",
         selection: selectedText,
@@ -485,8 +511,69 @@ function App() {
         reasoningEffort: effectiveEffort,
       });
       setTaskPrompt("");
+      setKind(t.kind);
       setChosenVersion("");
     }, "任务已提交，进度会自动保存");
+  const folderField: Field = {
+    name: "folderId",
+    label: "目录",
+    type: "select",
+    value: knowledgeFolder || "",
+    options: [
+      { value: "", label: "根目录" },
+      ...(knowledge.folders || []).map((f: any) => ({
+        value: f.id,
+        label: folderPath(f.id, knowledge.folders),
+      })),
+    ],
+  };
+  const addRequirementMaterial = () =>
+    open({
+      title: "添加需求资料",
+      description: "引用知识库中的文件，或上传仅此需求使用的资料。",
+      fields: [
+        {
+          name: "source",
+          label: "添加方式",
+          type: "select",
+          value: "library",
+          options: [
+            { value: "library", label: "从知识库选择" },
+            { value: "upload", label: "上传新文件" },
+          ],
+        },
+        {
+          name: "knowledgeId",
+          label: "知识库文件",
+          type: "select",
+          options: knowledge.items
+            .filter((k: any) => !k.requirementId)
+            .map((k: any) => ({
+              value: k.id,
+              label:
+                folderPath(k.folderId, knowledge.folders || []) +
+                " / " +
+                k.name,
+            })),
+        },
+        { name: "file", label: "上传文件", type: "file" },
+      ],
+      action: async (v) => {
+        if (v.source === "library") {
+          if (!v.knowledgeId) throw new Error("请先添加知识库文件");
+          await api("/requirements/" + requirementId + "/materials", "POST", {
+            knowledgeId: v.knowledgeId,
+          });
+        } else {
+          if (!v.file) throw new Error("请选择上传文件");
+          const form = new FormData();
+          form.append("projectId", projectId);
+          form.append("requirementId", requirementId);
+          form.append("file", v.file);
+          await api("/knowledge/upload", "POST", form);
+        }
+      },
+    });
   const uploadKnowledge = (requirementScope = false) =>
     open({
       title: requirementScope ? "添加需求资料" : "添加项目知识",
@@ -495,7 +582,7 @@ function App() {
         : "原文件和来源会保留。导入后显示真实解析状态。",
       fields: [
         { name: "file", label: "文件", type: "file", required: true },
-        { name: "module", label: "模块", value: "general" },
+        folderField,
         {
           name: "state",
           label: "知识状态",
@@ -511,7 +598,7 @@ function App() {
         const form = new FormData();
         form.append("file", v.file);
         form.append("projectId", projectId);
-        form.append("module", v.module);
+        form.append("folderId", v.folderId || "");
         form.append("state", v.state);
         if (requirementScope) form.append("requirementId", requirementId);
         await api("/knowledge/upload", "POST", form);
@@ -1130,37 +1217,75 @@ function App() {
                   <button
                     title="添加需求资料"
                     className="icon"
-                    onClick={() => uploadKnowledge(true)}
+                    onClick={addRequirementMaterial}
                   >
                     <Plus size={15} />
                   </button>
                 </div>
                 {knowledge.items
-                  .filter((k: any) => k.requirementId === requirementId)
+                  .filter(
+                    (k: any) =>
+                      k.requirementId === requirementId ||
+                      (knowledge.links || []).some(
+                        (l: any) =>
+                          l.requirementId === requirementId &&
+                          l.knowledgeId === k.id,
+                      ),
+                  )
                   .map((k: any) => (
-                    <button
-                      key={k.id}
-                      className="resource-link"
-                      onClick={() =>
-                        open({
-                          title: k.name,
-                          description: labels[k.status] + " · " + k.source,
-                          fields: [
-                            {
-                              name: "content",
-                              label: "解析内容",
-                              type: "readonly",
-                              value: k.text || k.error,
+                    <div className="material-entry" key={k.id}>
+                      <button
+                        className="resource-link"
+                        onClick={() =>
+                          open({
+                            title: k.name,
+                            description: labels[k.status] + " · " + k.source,
+                            fields: [
+                              {
+                                name: "content",
+                                label: "解析内容",
+                                type: "readonly",
+                                value: k.text || k.error,
+                              },
+                            ],
+                            submit: "关闭",
+                            action: async () => {},
+                          })
+                        }
+                      >
+                        <Paperclip size={14} />
+                        {k.name}
+                      </button>
+                      <button
+                        className="icon"
+                        title={"移除资料 " + k.name}
+                        onClick={() =>
+                          trusted(
+                            "移除需求资料",
+                            k.requirementId
+                              ? "从本需求移除这份资料，历史任务引用保留。"
+                              : "解除需求引用，知识库原文件保留。",
+                            async () => {
+                              await api(
+                                k.requirementId
+                                  ? "/knowledge/" + k.id
+                                  : "/requirements/" +
+                                      requirementId +
+                                      "/materials/" +
+                                      k.id,
+                                "DELETE",
+                                {},
+                              );
+                              setReferenceIds((ids) =>
+                                ids.filter((id) => id !== k.id),
+                              );
                             },
-                          ],
-                          submit: "关闭",
-                          action: async () => {},
-                        })
-                      }
-                    >
-                      <Paperclip size={14} />
-                      {k.name}
-                    </button>
+                          )
+                        }
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
                   ))}
                 {kind === "prototype" && version && (
                   <>
@@ -1211,219 +1336,26 @@ function App() {
                       {effectiveModel}
                     </small>
                   </div>
-                  <button
-                    className="icon"
-                    title="任务配置"
-                    onClick={() => setShowConfig(!showConfig)}
-                  >
-                    <Settings size={16} />
-                  </button>
                 </div>
-                <div className="agent-scroll">
-                  {showConfig && (
-                    <div className="generation-config">
-                      <div className="config-title">
-                        本次任务配置{" "}
-                        <button
-                          className="icon"
-                          onClick={() => setShowConfig(false)}
-                        >
-                          <ChevronDown size={15} />
-                        </button>
-                      </div>
-                      <label>
-                        产品助手
-                        <select
-                          aria-label="产品助手"
-                          value={effectiveExecutor}
-                          onChange={(e) => {
-                            setExecutor(e.target.value);
-                            setTaskModel("");
-                            setReasoningEffort("medium");
-                          }}
-                        >
-                          <option value="codex">Codex</option>
-                          <option value="claude">Claude</option>
-                        </select>
-                      </label>
-                      <label>
-                        模型
-                        <input
-                          aria-label="任务模型"
-                          list="assistant-models"
-                          value={effectiveModel}
-                          onChange={(e) => setTaskModel(e.target.value)}
-                        />
-                      </label>
-                      <label>
-                        思考深度
-                        <select
-                          aria-label="任务思考深度"
-                          value={effectiveEffort}
-                          onChange={(e) => setReasoningEffort(e.target.value)}
-                        >
-                          {effortOptions
-                            .filter(
-                              (o) =>
-                                effectiveExecutor === "codex" ||
-                                o.value !== "ultra",
-                            )
-                            .map((o) => (
-                              <option key={o.value} value={o.value}>
-                                {o.label}
-                              </option>
-                            ))}
-                        </select>
-                      </label>
-                      <p className="footnote">
-                        模型与深度会固定到本次任务。实际可用性取决于账号权限；未配置请前往设置。
-                      </p>
-                      <label>
-                        {kind === "prototype" ? "原型方式" : "执行 Skill"}
-                        <select
-                          aria-label="执行 Skill"
-                          value={
-                            skillId ||
-                            project?.defaults?.skills?.[kind] ||
-                            data.settings.defaults.skills?.[kind] ||
-                            ""
-                          }
-                          onChange={(e) => setSkillId(e.target.value)}
-                        >
-                          {skillOptions.map((x: any) => (
-                            <option key={x.id} value={x.id}>
-                              {x.name === "game-prototype"
-                                ? "交互原型"
-                                : x.name === "game-wireframe-prototype"
-                                  ? "低保真线框"
-                                  : x.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      {kind === "prototype" && (
-                        <>
-                          <label>
-                            视觉风格
-                            <select
-                              aria-label="视觉风格"
-                              value={styleId || defaultId("styleId")}
-                              onChange={(e) => setStyleId(e.target.value)}
-                            >
-                              {options("style").map((x: any) => (
-                                <option key={x.id} value={x.id}>
-                                  {x.name}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <div className="style-swatches">
-                            <div
-                              className={
-                                (styleId || defaultId("styleId")) ===
-                                options("style")[0]?.id
-                                  ? "swatch mint chosen"
-                                  : "swatch mint"
-                              }
-                            >
-                              <span />
-                              <span />
-                              <span />
-                              <small>清透</small>
-                            </div>
-                            <div
-                              className={
-                                (styleId || defaultId("styleId")) ===
-                                options("style")[1]?.id
-                                  ? "swatch ink chosen"
-                                  : "swatch ink"
-                              }
-                            >
-                              <span />
-                              <span />
-                              <span />
-                              <small>墨色</small>
-                            </div>
-                          </div>
-                          {version && (
-                            <label>
-                              修改范围
-                              <select
-                                value={scope}
-                                onChange={(e) => setScope(e.target.value)}
-                              >
-                                <option value="visual">
-                                  仅视觉（保留业务与交互）
-                                </option>
-                                <option value="layout">
-                                  允许调整布局与交互
-                                </option>
-                              </select>
-                            </label>
-                          )}
-                        </>
-                      )}
-                      {kind === "prd" && (
-                        <label>
-                          PRD 模板
-                          <select
-                            aria-label="PRD 模板"
-                            value={templateId || defaultId("templateId")}
-                            onChange={(e) => setTemplateId(e.target.value)}
-                          >
-                            {options("template").map((x: any) => (
-                              <option key={x.id} value={x.id}>
-                                {x.name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      )}
-                      <details>
-                        <summary>
-                          参考资料 · {referenceIds.length} 项手动选择
-                        </summary>
-                        <small>相关文本会自动检索；勾选可固定额外资料。</small>
-                        {knowledge.items
-                          .filter(
-                            (k: any) =>
-                              !k.requirementId ||
-                              k.requirementId === requirementId,
-                          )
-                          .map((k: any) => (
-                            <label className="check-label" key={k.id}>
-                              <input
-                                type="checkbox"
-                                checked={referenceIds.includes(k.id)}
-                                onChange={(e) =>
-                                  setReferenceIds(
-                                    e.target.checked
-                                      ? [...referenceIds, k.id]
-                                      : referenceIds.filter(
-                                          (id) => id !== k.id,
-                                        ),
-                                  )
-                                }
-                              />
-                              {k.name}
-                              <small>{labels[k.status]}</small>
-                            </label>
-                          ))}
-                      </details>
-                      <p className="config-note">
-                        扩展与参考资料版本将在任务开始时固定。
-                      </p>
-                    </div>
-                  )}
+                <div className="conversation-stage">
+                  <b>{({ requirement: "需求澄清", prototype: "原型设计与迭代", prd: "PRD 编写与修改", review: "评审与完善" } as any)[kind]}</b>
+                  <p>{({ requirement: "先聊清楚目标、用户和流程，澄清后将初步需求卡整理到右侧。", prototype: "基于需求卡生成原型，之后直接通过对话调整页面、布局与交互。", prd: "以需求卡和确认的原型为依据，按选定模板编写并通过对话完善。", review: "发起独立评审后，可在对话中讨论问题并修改 PRD；修改后重新评审。" } as any)[kind]}</p>
+                  <button disabled={busy || ws.tasks.some((t: any) => ["queued", "running"].includes(t.status))} onClick={() => startTask("generate")}>
+                    {({ requirement: "整理初步需求卡", prototype: req.heads.prototype ? "按当前对话更新原型" : "生成初版原型", prd: req.heads.prd ? "按当前对话更新 PRD" : "生成初版 PRD", review: "发起多 Agent 评审" } as any)[kind]}
+                  </button>
+                  {kind === "prototype" && <label>修改范围<select aria-label="原型修改范围" value={scope} onChange={(e) => setScope(e.target.value)}><option value="layout">交互与布局</option><option value="visual">仅视觉样式</option></select></label>}
+                </div>
+                <StageSettings requirement={req} project={project} settings={data.settings} extensions={data.extensions} busy={busy} onSave={(choices: any) => run(() => api("/requirements/" + requirementId + "/assistant", "PATCH", choices), "阶段配置已保存")} onManage={() => setView("extensions")} />
+                <div className="agent-scroll" aria-live="polite">
                   <div className="assistant-message">
                     <span className="tiny-label">产品助手</span>
                     <p>
                       {req.heads.requirement
-                        ? "可以继续生成成果，也可以描述一个具体修改。我会保留版本并展示修改摘要。"
+                        ? "我们可以继续讨论和澄清需求，整理后的内容会更新在右侧。"
                         : "先写下你的想法，或添加资料。我会帮你整理需求，提出需要澄清的问题。"}
                     </p>
                   </div>
-                  {ws.messages.slice(-8).map((m: any) => (
+                  {ws.messages.map((m: any) => (
                     <div
                       key={m.id}
                       className={
@@ -1437,155 +1369,30 @@ function App() {
                     </div>
                   ))}
                   {ws.questions
-                    .filter((q: any) => q.status === "open")
+                    .filter(
+                      (q: any) =>
+                        q.status === "open" &&
+                        !ws.messages.some(
+                          (m: any) =>
+                            m.taskId === q.taskId && m.content === q.question,
+                        ),
+                    )
                     .map((q: any) => (
-                      <div className="question-card" key={q.id}>
-                        <b>需要你补充</b>
+                      <div className="assistant-message" key={q.id}>
                         <p>{q.question}</p>
-                        <button
-                          onClick={() =>
-                            open({
-                              title: "回答产品助手",
-                              description: q.question,
-                              fields: [
-                                {
-                                  name: "answer",
-                                  label: "你的回答",
-                                  type: "textarea",
-                                  required: true,
-                                },
-                              ],
-                              action: async (v) => {
-                                await api(
-                                  "/questions/" + q.id + "/answer",
-                                  "POST",
-                                  v,
-                                );
-                              },
-                            })
-                          }
-                        >
-                          填写回答
-                        </button>
+                        <small>直接在下方输入框回答即可继续。</small>
                       </div>
                     ))}
-                  {[...ws.tasks]
-                    .reverse()
-                    .slice(0, 4)
-                    .map((t: any) => (
-                      <div className="task-card" key={t.id}>
-                        <div>
-                          <b>
-                            <Sparkles size={13} />
-                            {labels[t.kind]}
-                          </b>
-                          <span className={"task-state " + t.status}>
-                            {labels[t.status] || t.status}
-                          </span>
-                        </div>
-                        <progress max={100} value={t.progress} />
-                        <p>
-                          {t.error ||
-                            t.candidate?.summary ||
-                            t.events.at(-1)?.text ||
-                            "准备输入快照…"}
-                        </p>
-                        <details>
-                          <summary>执行记录与固定版本</summary>
-                          <small>
-                            模型：{t.snapshot.model} · {t.snapshot.executor} ·
-                            思考深度：{t.snapshot.reasoningEffort || "默认"}
-                          </small>
-                          {t.snapshot.releases.map((x: any) => (
-                            <small key={x.id}>
-                              {x.manifest.name} · v{x.number} ·{" "}
-                              {x.hash.slice(0, 8)}
-                            </small>
-                          ))}
-                          {t.events.map((e: any, i: number) => (
-                            <p key={i}>
-                              {fmt(e.at)} {e.text}
-                            </p>
-                          ))}
-                        </details>
-                        <div className="task-actions">
-                          {["queued", "running", "waiting"].includes(
-                            t.status,
-                          ) && (
-                            <button
-                              onClick={() =>
-                                run(
-                                  () =>
-                                    api(
-                                      "/tasks/" + t.id + "/cancel",
-                                      "POST",
-                                      {},
-                                    ),
-                                  "任务已取消",
-                                )
-                              }
-                            >
-                              <Square size={12} />
-                              取消
-                            </button>
-                          )}
-                          {[
-                            "failed",
-                            "cancelled",
-                            "interrupted",
-                            "waiting",
-                          ].includes(t.status) && (
-                            <button
-                              onClick={() =>
-                                run(
-                                  () =>
-                                    api(
-                                      "/tasks/" + t.id + "/retry",
-                                      "POST",
-                                      {},
-                                    ),
-                                  "已按原快照重试",
-                                )
-                              }
-                            >
-                              <RotateCcw size={12} />
-                              重试 / 继续
-                            </button>
-                          )}
-                          {t.candidate &&
-                            t.status !== "completed" &&
-                            !["queued", "running"].includes(t.status) && (
-                              <button
-                                onClick={() =>
-                                  open({
-                                    title: "恢复任务候选",
-                                    description:
-                                      "比较候选与当前成果；确认后将候选保存为当前成果的新版本。",
-                                    fields: [
-                                      {
-                                        name: "preview",
-                                        label: "候选内容",
-                                        type: "readonly",
-                                        value: t.candidate.content,
-                                      },
-                                    ],
-                                    submit: "采纳为新版本",
-                                    action: async () => {
-                                      await api(
-                                        "/tasks/" + t.id + "/recover",
-                                        "POST",
-                                        { base: req.heads[t.kind] || null },
-                                      );
-                                    },
-                                  })
-                                }
-                              >
-                                查看候选
-                              </button>
-                            )}
-                        </div>
-                      </div>
-                    ))}
+                  {ws.tasks.slice(-1).filter((t: any) => ["queued", "running", "failed", "cancelled", "interrupted"].includes(t.status)).map((t: any) => (
+                    <div className="conversation-status" key={t.id} role="status">
+                      <span>{["queued", "running"].includes(t.status) ? "正在思考…" : t.error || (t.status === "cancelled" ? "已停止回复" : "回复中断，请重试")}</span>
+                      {["queued", "running"].includes(t.status) ? (
+                        <button onClick={() => run(() => api("/tasks/" + t.id + "/cancel", "POST", {}), "已停止回复")}>停止</button>
+                      ) : (
+                        <button onClick={() => run(() => api("/tasks/" + t.id + "/retry", "POST", {}), "正在重试")}>重试</button>
+                      )}
+                    </div>
+                  ))}
                   {ws.annotations
                     .filter((a: any) => a.versionId === version?.id)
                     .map((a: any) => (
@@ -1704,21 +1511,58 @@ function App() {
                     </div>
                   )}
                   <div className="composer-box">
-                    <textarea
-                      aria-label="给产品助手的任务"
+                    <MentionInput
+                      onSubmit={() => startTask()}
+                      submitDisabled={busy || ws.tasks.some((t: any) => ["queued", "running"].includes(t.status))}
                       value={taskPrompt}
-                      onChange={(e) => setTaskPrompt(e.target.value)}
+                      onChange={setTaskPrompt}
                       placeholder={
                         kind === "prototype" && version
-                          ? "例如：将主按钮改成暖橙色，保留交互…"
-                          : "描述你想生成或修改的内容…"
+                          ? "描述局部修改…"
+                          : "说说你的想法，或回答助手的问题…"
+                      }
+                      items={knowledge.items
+                        .filter(
+                          (k: any) =>
+                            !k.requirementId ||
+                            k.requirementId === requirementId,
+                        )
+                        .map((k: any) => ({
+                          ...k,
+                          path: folderPath(k.folderId, knowledge.folders || []),
+                        }))}
+                      onSelect={(id) =>
+                        setReferenceIds((ids) => [...new Set([...ids, id])])
                       }
                     />
+                    {!!referenceIds.length && (
+                      <div className="reference-chips">
+                        {referenceIds.map((id) => {
+                          const k = knowledge.items.find(
+                            (k: any) => k.id === id,
+                          );
+                          return (
+                            k && (
+                              <button
+                                key={id}
+                                onClick={() =>
+                                  setReferenceIds((ids) =>
+                                    ids.filter((x) => x !== id),
+                                  )
+                                }
+                              >
+                                @{k.name} ×
+                              </button>
+                            )
+                          );
+                        })}
+                      </div>
+                    )}
                     <div className="composer-toolbar">
                       <button
                         className="icon"
                         title="添加需求资料"
-                        onClick={() => uploadKnowledge(true)}
+                        onClick={addRequirementMaterial}
                       >
                         <Plus size={22} />
                       </button>
@@ -1742,19 +1586,138 @@ function App() {
                             ["queued", "running"].includes(t.status),
                           )
                         }
-                        title="开始任务"
-                        onClick={startTask}
+                        title="发送消息"
+                        onClick={() => startTask()}
                       >
                         <ArrowUp size={23} />
                       </button>
                     </div>
                   </div>
                   <small className="privacy-note">
-                    本次内容将发送至在线模型。确认操作由你完成。
+                    Return 发送 · Shift + Return 换行。本次内容将发送至在线模型。确认操作由你完成。
                   </small>
                 </div>
               </aside>
               <section className="artifact-panel">
+                <details className="artifact-execution"><summary>执行状态</summary>
+                  {[...ws.tasks]
+                    .reverse()
+                    .slice(0, 4)
+                    .map((t: any) => (
+                      <div className="task-card" key={t.id}>
+                        <div>
+                          <b>
+                            <Sparkles size={13} />
+                            {t.snapshot.conversation ? "助手执行记录" : labels[t.kind]}
+                          </b>
+                          <span className={"task-state " + t.status}>
+                            {labels[t.status] || t.status}
+                          </span>
+                        </div>
+                        <progress max={100} value={t.progress} />
+                        <p>
+                          {t.error ||
+                            t.candidate?.summary ||
+                            t.events.at(-1)?.text ||
+                            "准备输入快照…"}
+                        </p>
+                        <details>
+                          <summary>执行记录与固定版本</summary>
+                          <small>
+                            模型：{t.snapshot.model} · {t.snapshot.executor} ·
+                            思考深度：{t.snapshot.reasoningEffort || "默认"}
+                          </small>
+                          {t.snapshot.releases.map((x: any) => (
+                            <small key={x.id}>
+                              {x.manifest.name} · v{x.number} ·{" "}
+                              {x.hash.slice(0, 8)}
+                            </small>
+                          ))}
+                          {t.events.map((e: any, i: number) => (
+                            <p key={i}>
+                              {fmt(e.at)} {e.text}
+                            </p>
+                          ))}
+                        </details>
+                        <div className="task-actions">
+                          {["queued", "running", "waiting"].includes(
+                            t.status,
+                          ) && (
+                            <button
+                              onClick={() =>
+                                run(
+                                  () =>
+                                    api(
+                                      "/tasks/" + t.id + "/cancel",
+                                      "POST",
+                                      {},
+                                    ),
+                                  "任务已取消",
+                                )
+                              }
+                            >
+                              <Square size={12} />
+                              取消
+                            </button>
+                          )}
+                          {[
+                            "failed",
+                            "cancelled",
+                            "interrupted",
+                            "waiting",
+                          ].includes(t.status) && (
+                            <button
+                              onClick={() =>
+                                run(
+                                  () =>
+                                    api(
+                                      "/tasks/" + t.id + "/retry",
+                                      "POST",
+                                      {},
+                                    ),
+                                  "已按原快照重试",
+                                )
+                              }
+                            >
+                              <RotateCcw size={12} />
+                              重试 / 继续
+                            </button>
+                          )}
+                          {t.candidate &&
+                            t.status !== "completed" &&
+                            !["queued", "running"].includes(t.status) && (
+                              <button
+                                onClick={() =>
+                                  open({
+                                    title: "恢复任务候选",
+                                    description:
+                                      "比较候选与当前成果；确认后将候选保存为当前成果的新版本。",
+                                    fields: [
+                                      {
+                                        name: "preview",
+                                        label: "候选内容",
+                                        type: "readonly",
+                                        value: t.candidate.content,
+                                      },
+                                    ],
+                                    submit: "采纳为新版本",
+                                    action: async () => {
+                                      await api(
+                                        "/tasks/" + t.id + "/recover",
+                                        "POST",
+                                        { base: req.heads[t.kind] || null },
+                                      );
+                                    },
+                                  })
+                                }
+                              >
+                                查看候选
+                              </button>
+                            )}
+                        </div>
+                      </div>
+                    ))}
+                </details>
                 <div className="artifact-toolbar">
                   <div className="artifact-title">
                     {kind === "prototype" ? (
@@ -1904,7 +1867,7 @@ function App() {
                   <div className="editor-container">
                     <div className="editor-meta">
                       {kind === "requirement"
-                        ? "记录目标、范围、核心规则与待确认问题。"
+                        ? "通过左侧多轮对话生成和完善需求卡，也可直接编辑补充。"
                         : kind === "prd"
                           ? "Markdown 文档 · 支持选中文本交给 AI 修改"
                           : "可编辑原始内容"}
@@ -1928,7 +1891,7 @@ function App() {
                       }}
                       placeholder={
                         kind === "requirement"
-                          ? "# 需求说明\n\n我们希望解决什么问题？\n\n## 用户与场景\n\n## 核心规则\n\n## 待确认事项"
+                          ? "先在左侧聊清楚目标、用户与流程。澄清后的初步需求卡会显示在这里，也可以手动编辑。"
                           : kind === "prd"
                             ? "粘贴已有 Markdown PRD，或在确认原型后让产品助手起草。"
                             : kind === "review"
@@ -2081,332 +2044,15 @@ function App() {
           </div>
         )}
         {view === "knowledge" && (
-          <div className="page">
-            <div className="page-heading">
-              <div>
-                <p className="eyebrow">PROJECT MEMORY</p>
-                <h1>知识库</h1>
-                <p>让每一次决策，都能找到来源。</p>
-              </div>
-              <button
-                className="primary"
-                disabled={!projectId}
-                onClick={() => uploadKnowledge()}
-              >
-                <Plus size={17} />
-                添加资料
-              </button>
-            </div>
-            {!projectId ? (
-              <div className="empty-state">
-                <Library size={36} />
-                <h2>先创建一个项目</h2>
-                <button onClick={newProject}>创建项目</button>
-              </div>
-            ) : (
-              <>
-                <div className="knowledge-summary">
-                  <div>
-                    <b>
-                      {
-                        knowledge.items.filter((x: any) => !x.requirementId)
-                          .length
-                      }
-                    </b>
-                    <span>项目知识</span>
-                  </div>
-                  <div>
-                    <b>
-                      {
-                        knowledge.items.filter((x: any) => x.requirementId)
-                          .length
-                      }
-                    </b>
-                    <span>需求资料</span>
-                  </div>
-                  <div>
-                    <b>
-                      {
-                        knowledge.items.filter(
-                          (x: any) => x.status === "parsed",
-                        ).length
-                      }
-                    </b>
-                    <span>完成文本解析</span>
-                  </div>
-                  <div>
-                    <b>{knowledge.conflicts.length}</b>
-                    <span>待核对冲突</span>
-                  </div>
-                </div>
-                <div className="list-toolbar">
-                  <label className="search-box">
-                    <Search size={16} />
-                    <input
-                      placeholder="搜索名称、模块或内容"
-                      value={filter}
-                      onChange={(e) => setFilter(e.target.value)}
-                    />
-                  </label>
-                  <div>
-                    <button
-                      onClick={() =>
-                        open({
-                          title: "添加文本知识",
-                          fields: [
-                            { name: "name", label: "资料名称", required: true },
-                            { name: "module", label: "模块", value: "general" },
-                            {
-                              name: "content",
-                              label: "内容",
-                              type: "textarea",
-                              required: true,
-                            },
-                          ],
-                          action: async (v) => {
-                            await api("/knowledge/text", "POST", {
-                              ...v,
-                              projectId,
-                            });
-                          },
-                        })
-                      }
-                    >
-                      <FileText size={15} />
-                      文本
-                    </button>
-                    <button
-                      onClick={() =>
-                        open({
-                          title: "导入知识目录",
-                          description:
-                            "目录需先在设置中授权。保留每个原文件与来源，不能解析的资料会明确标记。",
-                          fields: [
-                            {
-                              name: "path",
-                              label: "本地目录绝对路径",
-                              required: true,
-                            },
-                            { name: "module", label: "模块", value: "general" },
-                          ],
-                          action: async (v) => {
-                            await api("/knowledge/directory", "POST", {
-                              ...v,
-                              projectId,
-                            });
-                          },
-                        })
-                      }
-                    >
-                      <FolderKanban size={15} />
-                      目录
-                    </button>
-                    <button
-                      onClick={() =>
-                        open({
-                          title: "导入指定飞书文档",
-                          fields: [
-                            {
-                              name: "doc",
-                              label: "飞书文档 URL / ID",
-                              required: true,
-                            },
-                            { name: "name", label: "资料名称", required: true },
-                          ],
-                          action: async (v) => {
-                            await api("/knowledge/feishu", "POST", {
-                              ...v,
-                              projectId,
-                            });
-                          },
-                        })
-                      }
-                    >
-                      <Link size={15} />
-                      飞书
-                    </button>
-                  </div>
-                </div>
-                {knowledge.conflicts.length > 0 && (
-                  <div className="conflicts">
-                    <AlertCircle size={18} />
-                    <div>
-                      <b>发现资料冲突候选，请核对来源与状态</b>
-                      {knowledge.conflicts.map((c: any, i: number) => (
-                        <p key={i}>
-                          {
-                            knowledge.items.find((x: any) => x.id === c.left)
-                              ?.name
-                          }
-                          ：{c.reason}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <div className="knowledge-table">
-                  <div className="table-head">
-                    <span>资料</span>
-                    <span>范围 / 模块</span>
-                    <span>状态</span>
-                    <span>解析</span>
-                    <span>操作</span>
-                  </div>
-                  {knowledge.items
-                    .filter((k: any) =>
-                      (k.name + " " + k.module + " " + k.text).includes(filter),
-                    )
-                    .map((k: any) => (
-                      <div className="table-row" key={k.id}>
-                        <button
-                          className="knowledge-name"
-                          onClick={() =>
-                            open({
-                              title: k.name,
-                              description: `来源：${k.source} · v${k.version} · ${labels[k.status] || k.status}`,
-                              fields: [
-                                {
-                                  name: "text",
-                                  label: "解析内容",
-                                  type: "readonly",
-                                  value: k.text || k.error,
-                                },
-                              ],
-                              submit: "关闭",
-                              action: async () => {},
-                            })
-                          }
-                        >
-                          <span className="file-icon">
-                            <FileText size={20} />
-                          </span>
-                          <span>
-                            <b>{k.name}</b>
-                            <small>
-                              v{k.version} · {fmt(k.createdAt)}
-                            </small>
-                          </span>
-                        </button>
-                        <span>
-                          {k.requirementId ? "需求资料" : "项目知识"}
-                          <small>{k.module}</small>
-                        </span>
-                        <span className="pill">
-                          {labels[k.state] || k.state}
-                        </span>
-                        <span
-                          className={"parse-status " + k.status}
-                          title={k.error}
-                        >
-                          {labels[k.status] || k.status}
-                        </span>
-                        <div>
-                          <a
-                            href={"/api/knowledge/" + k.id + "/file"}
-                            className="button icon"
-                            title="下载原文件"
-                          >
-                            <Download size={15} />
-                          </a>
-                          {!k.requirementId && (
-                            <button
-                              title="提出知识更新"
-                              onClick={() =>
-                                open({
-                                  title: "提出知识更新",
-                                  description:
-                                    "正式知识不会被直接覆盖。提案经用户采纳后保存为新版本。",
-                                  fields: [
-                                    {
-                                      name: "text",
-                                      label: "建议的新内容",
-                                      type: "textarea",
-                                      value: k.text,
-                                      required: true,
-                                    },
-                                    {
-                                      name: "reason",
-                                      label: "依据与影响",
-                                      required: true,
-                                    },
-                                  ],
-                                  action: async (v) => {
-                                    await api(
-                                      "/knowledge/" + k.id + "/proposals",
-                                      "POST",
-                                      v,
-                                    );
-                                  },
-                                })
-                              }
-                            >
-                              提案
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  {!knowledge.items.length && (
-                    <div className="empty-state">
-                      <BookOpen size={33} />
-                      <h3>知识从一份资料开始</h3>
-                      <p>
-                        支持 Markdown、TXT、PDF、DOCX、CSV 与图片。
-                        <br />
-                        图片及扫描 PDF 不会被假装成已解析文本。
-                      </p>
-                    </div>
-                  )}
-                </div>
-                {knowledge.proposals.length > 0 && (
-                  <>
-                    <h2 className="subheading">知识更新提案</h2>
-                    {knowledge.proposals.map((p: any) => (
-                      <article className="proposal" key={p.id}>
-                        <div>
-                          <b>
-                            {
-                              knowledge.items.find(
-                                (x: any) => x.id === p.knowledgeId,
-                              )?.name
-                            }
-                          </b>
-                          <span className="pill">
-                            {p.status === "adopted" ? "已采纳" : "待采纳"}
-                          </span>
-                        </div>
-                        <p>{p.reason}</p>
-                        <details>
-                          <summary>查看建议内容</summary>
-                          <pre>{p.text}</pre>
-                        </details>
-                        {p.status === "pending" && (
-                          <button
-                            className="primary"
-                            onClick={() =>
-                              trusted(
-                                "采纳知识更新",
-                                "此操作会创建一个新的正式知识版本，原版本保留。",
-                                async () => {
-                                  await api(
-                                    "/proposals/" + p.id + "/adopt",
-                                    "POST",
-                                    {},
-                                  );
-                                },
-                              )
-                            }
-                          >
-                            确认采纳
-                          </button>
-                        )}
-                      </article>
-                    ))}
-                  </>
-                )}
-              </>
-            )}
-          </div>
+          <KnowledgeBrowser
+            projectId={projectId}
+            data={knowledge}
+            folderId={knowledgeFolder}
+            setFolderId={setKnowledgeFolder}
+            open={open}
+            run={run}
+            upload={() => uploadKnowledge()}
+          />
         )}
         {view === "extensions" && (
           <div className="page">
@@ -2723,9 +2369,11 @@ function App() {
           <div className="page settings-page">
             <div className="page-heading">
               <div>
-                <p className="eyebrow">CONNECTED, ON YOUR TERMS</p>
                 <h1>设置</h1>
-                <p>连接状态、有效配置与资料边界，都清楚可见。</p>
+                <p>
+                  管理助手、配置状态与本地存储。资料保存在本机，AI
+                  任务会发送相关内容至在线模型。
+                </p>
               </div>
               <button
                 onClick={() =>
@@ -2738,16 +2386,6 @@ function App() {
                 <RotateCcw size={16} />
                 检查连接配置
               </button>
-            </div>
-            <div className="notice">
-              <Shield size={19} />
-              <p>
-                <b>本地优先，不等于离线</b>
-                <br />
-                {data.onlineNotice} API
-                密钥由服务端读取；订阅凭证保存在独立私有目录，不进入页面、Prompt
-                或数据库。
-              </p>
             </div>
             {[
               [
@@ -2791,65 +2429,84 @@ function App() {
                       : "检测中"}
                   </span>
                 </div>
-                <p>{desc}</p>
-                <div className="config-row">
-                  <span>配置方式</span>
-                  <code>{config}</code>
-                </div>
                 <div className="config-status">
                   <AlertCircle size={15} />
-                  <span>{status?.[key]?.detail || "请点击检查连接配置"}</span>
+                  <span>
+                    {status?.[key]?.state === "configured"
+                      ? key === "codex"
+                        ? status.codex.mode === "api-key"
+                          ? "API Key 已配置 · 真实调用待实测"
+                          : "ChatGPT 已登录 · 真实调用待实测"
+                        : "已配置 · 真实调用待实测"
+                      : status?.[key]?.detail || "正在检查配置…"}
+                  </span>
                 </div>
                 {key === "codex" && (
                   <>
-                    <div className="config-row">
-                      <button
-                        onClick={() =>
-                          run(async () => {
-                            await api("/codex/login", "POST", {});
-                            setStatus(await api("/status"));
-                          }, "已发起订阅登录")
-                        }
-                      >
-                        使用 ChatGPT 登录
-                      </button>
-                      <button
-                        onClick={() =>
-                          trusted(
-                            "退出订阅登录",
-                            "将移除网站的独立登录状态，进行中的登录也会取消。",
-                            async () => {
-                              await api("/codex/logout", "POST", {});
-                              setStatus(await api("/status"));
-                            },
-                          )
-                        }
-                      >
-                        退出 / 取消登录
-                      </button>
-                    </div>
-                    {status?.codex?.login && (
-                      <div className="login-status" role="status">
-                        <p>{status.codex.login.detail}</p>
-                        {status.codex.login.url && (
-                          <a
-                            href={status.codex.login.url}
-                            target="_blank"
-                            rel="noreferrer"
+                    {status?.codex?.mode === "subscription" && (
+                      <div className="config-row login-actions">
+                        {status.codex.state !== "configured" &&
+                          status.codex.login?.state !== "waiting" && (
+                            <button
+                              disabled={busy}
+                              onClick={() =>
+                                run(async () => {
+                                  await api("/codex/login", "POST", {});
+                                  setStatus(await api("/status"));
+                                }, "已发起订阅登录")
+                              }
+                            >
+                              使用 ChatGPT 登录
+                            </button>
+                          )}
+                        {(status.codex.state === "configured" ||
+                          status.codex.login?.state === "waiting") && (
+                          <button
+                            disabled={busy}
+                            onClick={() =>
+                              trusted(
+                                "退出订阅登录",
+                                "将移除网站的独立登录状态，进行中的登录也会取消。",
+                                async () => {
+                                  await api("/codex/logout", "POST", {});
+                                  setStatus(await api("/status"));
+                                },
+                              )
+                            }
                           >
-                            打开官方登录页面 ↗
-                          </a>
-                        )}
-                        {status.codex.login.code && (
-                          <p>
-                            一次性代码：
-                            <strong>{status.codex.login.code}</strong>
-                          </p>
+                            {status.codex.state === "configured"
+                              ? "退出登录"
+                              : "取消登录"}
+                          </button>
                         )}
                       </div>
                     )}
+                    {status?.codex?.state !== "configured" &&
+                      status?.codex?.mode === "subscription" &&
+                      ["waiting", "failed"].includes(
+                        status?.codex?.login?.state,
+                      ) && (
+                        <div className="login-status" role="status">
+                          <p>{status.codex.login.detail}</p>
+                          {status.codex.login.url && (
+                            <a
+                              href={status.codex.login.url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              打开官方登录页面 ↗
+                            </a>
+                          )}
+                          {status.codex.login.code && (
+                            <p>
+                              一次性代码：
+                              <strong>{status.codex.login.code}</strong>
+                            </p>
+                          )}
+                        </div>
+                      )}
                     <div className="config-row">
-                      <span>系统默认助手 / 模型 / 思考深度</span>
+                      <span>默认助手 / 模型 / 思考深度</span>
                       <b>
                         {data.settings.executor} · {data.settings.model} ·{" "}
                         {data.settings.reasoningEffort}
@@ -2868,17 +2525,23 @@ function App() {
                         编辑
                       </button>
                     </div>
-                    <p className="footnote">
-                      真实连接可通过需求工作区提交任务验证，执行记录会保存模型与结果；未配置不会伪造输出。
-                    </p>
                   </>
                 )}
-                {key === "codex" && (
-                  <p className="footnote">
-                    独立登录目录：{status?.codex?.home || "数据目录/codex-auth"}
-                    。不会自动读取 Codex 桌面登录。
-                  </p>
-                )}
+                <details className="setting-details">
+                  <summary>配置详情</summary>
+                  <p>{desc}</p>
+                  <div className="config-row">
+                    <span>配置方式</span>
+                    <code>{config}</code>
+                  </div>
+                  {key === "codex" && (
+                    <p>
+                      独立登录目录：
+                      {status?.codex?.home || "数据目录/codex-auth"}
+                      。不会自动读取 Codex 桌面登录。
+                    </p>
+                  )}
+                </details>
               </section>
             ))}
             <section className="setting-card">

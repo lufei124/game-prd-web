@@ -119,7 +119,7 @@ test("bootstrap preserves existing assistant choices and Chinese display without
     const skills = new Extensions(f.s)
       .list()
       .filter((e) => e.type !== "template");
-    assert.equal(skills.length, 7);
+    assert.equal(skills.length, 8);
     assert.ok(
       skills.every(
         (e) =>

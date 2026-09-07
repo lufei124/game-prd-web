@@ -18,6 +18,8 @@ import {
   unzip,
   encoded,
 } from "./extensions.ts";
+import { conversationOptions } from "./conversation.ts";
+import { KnowledgeTree } from "./knowledge-tree.ts";
 import { Knowledge } from "./knowledge.ts";
 import { Tasks, redact } from "./tasks.ts";
 import { ClaudeRuntime, type AgentRuntime } from "./agent.ts";
@@ -146,7 +148,7 @@ export async function createApp(
     ],
     requirements: s
       .all("requirement")
-      .map((r) => ({ ...r, stage: domain.stage(r) })),
+      .map((r) => ({ ...r, stage: domain.stage(r), conversationStage: domain.conversationStage(r) })),
     extensions: extensions.list().map((e) => ({
       ...e,
       release: {
@@ -237,7 +239,7 @@ export async function createApp(
   route("get", "/api/requirements/:id", (r) => {
     const req = s.get("requirement", r.params.id);
     return {
-      requirement: { ...req, stage: domain.stage(req) },
+      requirement: { ...req, stage: domain.stage(req), conversationStage: domain.conversationStage(req) },
       versions: domain.versions(req.id),
       tasks: s
         .all("task")
@@ -248,6 +250,10 @@ export async function createApp(
             releases: snapshot.releases.map(({ files, ...x }: any) => x),
             knowledge: snapshot.knowledge.map(({ text, ...x }: any) => x),
             scope: snapshot.scope,
+            conversation: !!snapshot.conversation,
+            chatOnly: !!snapshot.chatOnly,
+            stage: snapshot.stage,
+            action: snapshot.action,
             model: snapshot.model,
             executor: snapshot.executor,
             reasoningEffort: snapshot.reasoningEffort,
@@ -347,6 +353,39 @@ export async function createApp(
       .parse(r.body);
     return tasks.create(r.params.id, b);
   });
+  route("patch", "/api/requirements/:id/assistant", (r) => {
+    const requirement = s.get("requirement", r.params.id);
+    const choices = z.object({
+      skills: z.object({ requirement: id.optional(), prototype: id.optional(), prd: id.optional(), review: id.optional() }).strict().default({}),
+      styleId: id.optional(), templateId: id.optional(),
+    }).strict().parse(r.body);
+    for (const [stage, extensionId] of Object.entries(choices.skills)) {
+      check(extensions.select(extensionId, requirement.projectId, stage).manifest.type === "skill", "请选择对应阶段的 Skill");
+    }
+    for (const [key, stage, type] of [["styleId", "prototype", "style"], ["templateId", "prd", "template"]] as const) {
+      if (choices[key]) check(extensions.select(choices[key], requirement.projectId, stage).manifest.type === type, "扩展类型不匹配");
+    }
+    return s.put("requirement", { ...requirement, assistantDefaults: choices });
+  });
+  route("post", "/api/requirements/:id/chat", (r) => {
+    const b = z
+      .object({
+        prompt: text,
+        stage: kindSchema.optional(),
+        action: z.enum(["discuss", "generate"]).default("discuss"),
+        scope: z.enum(["visual", "layout"]).default("layout"),
+        chatOnly: z.boolean().default(false),
+        referenceIds: z.array(id).default([]),
+        executor: executorSchema.optional(),
+        model: modelSchema.optional(),
+        reasoningEffort: effortSchema.optional(),
+        selection: z.string().max(100000).optional(),
+      })
+      .parse(r.body);
+    return s.tx(() =>
+      tasks.create(r.params.id, conversationOptions(s, r.params.id, b)),
+    );
+  });
   route("post", "/api/tasks/:id/cancel", (r) => tasks.cancel(r.params.id));
   route("post", "/api/tasks/:id/retry", (r) => tasks.retry(r.params.id));
   route("post", "/api/tasks/:id/recover", (r) => {
@@ -426,13 +465,14 @@ export async function createApp(
   route("get", "/api/knowledge", (r) => {
     const projectId = id.parse(r.query.projectId);
     return {
-      items: s.all("knowledge").filter((x) => x.projectId === projectId),
+      items: s
+        .all("knowledge")
+        .filter((x) => x.projectId === projectId && !x.deletedAt),
+      folders: s
+        .all("knowledgeFolder")
+        .filter((x) => x.projectId === projectId),
+      links: s.all("knowledgeLink").filter((x) => x.projectId === projectId),
       conflicts: knowledge.conflicts(projectId),
-      proposals: s
-        .all("proposal")
-        .filter(
-          (x) => s.get("knowledge", x.knowledgeId).projectId === projectId,
-        ),
     };
   });
   app.post(
@@ -450,6 +490,7 @@ export async function createApp(
             "upload:" + req.file.originalname,
             req.body.module || "general",
             req.body.state || "pending",
+            req.body.folderId || null,
           ),
         );
       } catch (e) {
@@ -465,6 +506,7 @@ export async function createApp(
         name: text.max(150),
         content: text,
         module: z.string().default("general"),
+        folderId: id.nullable().default(null),
         state: z
           .enum(["pending", "confirmed", "live", "historical"])
           .default("pending"),
@@ -478,6 +520,7 @@ export async function createApp(
       "manual:" + b.name,
       b.module,
       b.state,
+      b.folderId,
     );
   });
   route("post", "/api/knowledge/directory", async (r) => {
@@ -486,7 +529,23 @@ export async function createApp(
       s.get("settings", "system").authorizedRoots,
     );
     const results = [];
-    for (const [name, data] of Object.entries(files))
+    const projectId = id.parse(r.body.projectId);
+    for (const [name, data] of Object.entries(files)) {
+      let folderId = r.body.folderId || null;
+      new KnowledgeTree(s).folder(projectId, folderId);
+      for (const segment of name.split("/").slice(0, -1)) {
+        const existing = s
+          .all("knowledgeFolder")
+          .find(
+            (x) =>
+              x.projectId === projectId &&
+              x.parentId === folderId &&
+              x.name === segment,
+          );
+        folderId =
+          existing?.id ||
+          new KnowledgeTree(s).create(projectId, segment, folderId).id;
+      }
       results.push(
         await knowledge.import(
           id.parse(r.body.projectId),
@@ -495,8 +554,11 @@ export async function createApp(
           Buffer.from(data, "base64"),
           "directory:" + r.body.path + "/" + name,
           r.body.module || "general",
+          "pending",
+          folderId,
         ),
       );
+    }
     return results;
   });
   route("post", "/api/knowledge/feishu", async (r) => {
@@ -509,18 +571,29 @@ export async function createApp(
       "feishu:" + remote.id,
       r.body.module || "general",
       "pending",
+      r.body.folderId || null,
     );
   });
-  route("post", "/api/knowledge/:id/proposals", (r) =>
-    knowledge.propose(
-      r.params.id,
-      text.parse(r.body.text),
-      text.parse(r.body.reason),
-      "user",
+  const tree = new KnowledgeTree(s);
+  route("post", "/api/knowledge/folders", (r) =>
+    tree.create(
+      id.parse(r.body.projectId),
+      text.max(100).parse(r.body.name),
+      r.body.parentId || null,
     ),
   );
-  route("post", "/api/proposals/:id/adopt", (r) =>
-    knowledge.adopt(r.params.id),
+  route("delete", "/api/knowledge/folders/:id", (r) =>
+    tree.removeFolder(r.params.id),
+  );
+  route("delete", "/api/knowledge/:id", (r) => tree.removeFile(r.params.id));
+  route("patch", "/api/knowledge/:id", (r) =>
+    tree.moveFile(r.params.id, r.body.folderId || null),
+  );
+  route("post", "/api/requirements/:id/materials", (r) =>
+    tree.link(r.params.id, id.parse(r.body.knowledgeId)),
+  );
+  route("delete", "/api/requirements/:id/materials/:knowledgeId", (r) =>
+    tree.unlink(r.params.id, r.params.knowledgeId),
   );
   app.get("/api/knowledge/:id/file", async (req, res, next) => {
     try {

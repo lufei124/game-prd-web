@@ -3,7 +3,10 @@ import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { assistantDefaults } from "./assistant-settings.ts";
 import { Extensions, encoded } from "./extensions.ts";
-import { Store } from "./db.ts";
+import { cpSync, mkdirSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { Store, check } from "./db.ts";
 
 // Legacy identifiers are migration data, never filesystem locations or dependencies.
 const catalog = [
@@ -63,6 +66,7 @@ const catalog = [
     path: "ink/SKILL.md",
     legacy: "ink-editorial-style",
   },
+  { key: "wireframe-style", name: "低保真线框风格", type: "style", stage: "prototype", path: "wireframe/SKILL.md", legacy: "low-fidelity-wireframe-style" },
   {
     key: "template",
     name: "研发执行版",
@@ -75,7 +79,7 @@ const catalog = [
 const legacyPrefix = "upstream:mobile-game-product-forge/";
 
 export async function bootstrap(s: Store) {
-  if (s.maybe("settings", "system")?.standaloneDefaultsRevision === 1) return;
+  if (s.maybe("settings", "system")?.standaloneDefaultsRevision === 2) return;
   // Read every bundled file before starting a transaction: missing resources leave no partial upgrade.
   const bundles = await Promise.all(
     catalog.map(async (spec) => {
@@ -103,8 +107,26 @@ export async function bootstrap(s: Store) {
       };
     }),
   );
+  // Startup has not opened HTTP routes or started model tasks. Keep a complete
+  // local backup before upgrading installed defaults, and compare exact rows.
+  const before = s.db.prepare("SELECT * FROM entities ORDER BY kind,id").all();
+  if (s.maybe("settings", "system")) {
+    const backup = join(s.root, "backups", "defaults-v2-" + Date.now());
+    mkdirSync(backup, { recursive: true, mode: 0o700 });
+    for (const entry of readdirSync(s.root)) {
+      if (entry === "backups" || entry.startsWith("workbench.sqlite")) continue;
+      cpSync(join(s.root, entry), join(backup, entry), { recursive: true, dereference: false });
+    }
+    s.db.prepare("VACUUM INTO ?").run(join(backup, "workbench.sqlite"));
+    const copy = new DatabaseSync(join(backup, "workbench.sqlite"), { readOnly: true });
+    try {
+      check(JSON.stringify(copy.prepare("SELECT * FROM entities ORDER BY kind,id").all()) === JSON.stringify(before), "默认扩展升级备份校验失败");
+      check(Object.values(copy.prepare("PRAGMA integrity_check").get()!)[0] === "ok", "备份数据库完整性校验失败");
+    } finally { copy.close(); }
+  }
   const ex = new Extensions(s);
   s.tx(() => {
+    check(JSON.stringify(s.db.prepare("SELECT * FROM entities ORDER BY kind,id").all()) === JSON.stringify(before), "备份后数据库发生变化，已中止默认扩展升级");
     const ids: Record<string, string> = {};
     for (const { spec, files, description } of bundles) {
       const existing = s.all("extension").find((e) => {
@@ -124,12 +146,16 @@ export async function bootstrap(s: Store) {
         return slug === spec.legacy;
       });
       if (existing?.builtinKey) {
-        ids[spec.key] = existing.id;
-        continue;
+        const current = s.get("release", existing.currentRelease);
+        const userEdited = s.all("release").some((r) => r.extensionId === existing.id && !r.source.startsWith("builtin:game-prd-web/") && !r.source.startsWith(legacyPrefix));
+        if (userEdited || !current.source.startsWith("builtin:game-prd-web/") || JSON.stringify(current.files) === JSON.stringify(files)) {
+          ids[spec.key] = existing.id;
+          continue;
+        }
       }
       const installed = ex.install(
         files,
-        `builtin:game-prd-web/${spec.key}@1`,
+        `builtin:game-prd-web/${spec.key}@2`,
         {
           name: spec.name,
           type: spec.type,
@@ -172,13 +198,17 @@ export async function bootstrap(s: Store) {
         (p: string) =>
           basename(p.replace(/[\\/]+$/, "")) !== "mobile-game-product-forge",
       ),
-      standaloneDefaultsRevision: 1,
+      standaloneDefaultsRevision: 2,
     });
     s.db
       .prepare("INSERT OR IGNORE INTO migrations VALUES(2,datetime('now'))")
       .run();
+    for (const row of before as any[]) {
+      if (["settings", "extension"].includes(row.kind)) continue;
+      check(JSON.stringify(s.get(row.kind, row.id)) === row.data, "升级不得改变既有记录或历史版本");
+    }
     s.audit("system", "standalone.defaults.migrate", "system", {
-      version: 1,
+      version: 2,
       extensions: ids,
     });
   });

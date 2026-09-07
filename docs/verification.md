@@ -11,6 +11,20 @@
 - 本机 4317 已从 game-prd-web 重启，默认 subscription，自动发现安装依赖附带的 Codex。尚未登录，明确显示待登录。实际项目和回收站均未执行删除。
 - 真实订阅登录、账号额度/模型权限及飞书调用仍待用户配置后实测。
 
+## Codex 启动修复与多轮需求对话
+
+- 复现并修复：SDK 继承网站 cwd 导致 OS 沙箱拒绝启动；SDK schema 在系统临时目录，现由受控启动器复制进任务目录。仅增加固定 mDNSResponder Unix socket 访问，未启用宽泛 system-socket 权限。
+- 无凭证诊断已从 EPERM / DNS 错误进展到预期 401；真实订阅诊断使用 gpt-5.6-terra / low，成功返回结构化候选。只发送固定连接测试文字，无项目或知识库内容。第一次 medium 诊断 60 秒超时，第二次低深度成功，不将超时标为成功。
+- 干净目录 `/private/tmp/game-prd-chat-clean-7gkl1fsj` 安装、构建、38 项后端测试、8 项浏览器测试通过；覆盖阶段 Skill 自动选择、显式风格请求、连续问答与需求卡版本更新、临时 schema 和越权文件隔离。
+- 对话设置面板移除，需求阶段通过聊天逐轮生成文档；当前本地服务已更新。真实飞书交付仍未实测。
+
+## 知识库目录与需求引用
+
+- 干净目录 `/private/tmp/game-prd-knowledge-clean-fcfc8cvi` 完成安装、构建、36 项后端测试和 7 项浏览器测试。
+- 覆盖旧模块幂等迁移、子目录与跨项目校验、需求资料引用幂等、删除清理引用、旧快照与原文件保留，以及界面 @ 选择实际传递 referenceIds。模型执行仍使用 Mock。
+- 正式服务无运行任务时停止并备份完整数据到 Git 忽略的 `backups/knowledge-tree-20260907-200132/`，随后在 4317 启动新服务。
+- 原实体逐项核对不变（资料仅补充 folderId），1 个原文件 SHA-256 一致；SQLite 完整性正常。现有资料位于根目录，网站 HTTP 200。备份与知识库数据均未提交。
+
 ## 白色输入框与模型菜单
 
 - 输入框统一白色主题，移除底部“由你确认”字样；模型菜单使用浏览器原生 Popover，在按钮旁展开并支持点外部/Esc 关闭。
@@ -56,3 +70,30 @@
 新项目有独立 AGENTS、README、CHANGELOG、架构/扩展/迁移说明和核验脚本。原 Skill 正文、知识包、安装与 CLI 规范未改动，无需维护或同步它们。
 
 备份位置在两个项目之外：`/Users/luffy/工作/UGit/.game-prd-web-backup-20260907-191444`。original-workbench 为迁移前完整备份，retired-workbench 为退出旧仓库的原目录，old-documents 与 patch 保留撤销前文档；备份目录不属于新 Git 仓库。
+
+## 设置页精简与登录状态
+
+- 设置页保留助手配置状态、默认模型及必要操作，SDK、配置方式与登录目录折叠在「配置详情」。
+- 已配置的 Codex 不再展示订阅登录入口与旧验证码；退出确认后才恢复登录入口，授权等待期间只能取消，API Key 模式隐藏订阅登录操作。
+- 服务端重复登录请求直接返回已有配置状态，不创建新的授权流程。
+- 验证：npm test 38 项通过；npm run build 通过；使用本机 Chrome 执行 npm run test:e2e，8 项通过。重新构建后全流程回归通过。
+- 登录测试使用假 CLI 与浏览器 Mock，未退出真实账号、未发起真实授权或模型调用。
+
+### Codex 聊天模式验收（2026-09-07）
+
+- `npm test`：39 项通过，包含聊天历史、固定 Codex 与禁止成果写入的 Mock 测试。
+- `npm run build`：通过。
+- `PLAYWRIGHT_CHROMIUM_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" npm run test:e2e`：9 项通过，包含聊天发送与刷新恢复。使用本机 Chrome，测试服务为 Mock。
+- 未进行真实在线模型调用；Codex 登录和在线回复需在实际配置环境验收。
+
+### 统一产品助手对话验收（2026-09-07）
+
+已替代此前双模式界面。`npm test` 39 项通过，`npm run build` 通过，本机 Chrome 的 `npm run test:e2e` 9 项通过。Mock 覆盖普通问答不生成版本、逐轮提问、回答后右侧需求卡更新、对话区无成果任务卡片、Return 发送与刷新恢复。执行记录改从右侧“执行状态”展开。真实 Codex 在线澄清效果待实测。
+
+### 对话流程、阶段配置与评审验收（2026-09-07）
+
+- `npm test`：42 项通过，包含明确阶段、不按关键词切换、默认 scope=layout、需求级风格选择、三个独立评审调用及部分失败不提交、升级备份与用户扩展保护。
+- `npm run build`：通过。
+- 使用本机 Chrome 的 `npm run test:e2e`：10 项通过，覆盖需求确认→原型→PRD→评审→终稿，以及阶段 Skill、单选风格、模板预览、配置刷新恢复。
+- 将源码、内置 defaults 和实际依赖复制到不含相邻仓库的临时目录，运行 standalone 和 workflow 验收：5 项通过。
+- 模型和发布验收使用 Mock。真实 Codex/Claude 多会话评审质量及在线澄清待实测，未提交、推送或部署。

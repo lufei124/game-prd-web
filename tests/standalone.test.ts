@@ -155,7 +155,7 @@ test("fresh installation is self-contained, has all generic stages, and resolves
     await bootstrap(s);
     const ex = new Extensions(s);
     const all = ex.list();
-    assert.equal(all.length, 8);
+    assert.equal(all.length, 9);
     assert.deepEqual(s.get("settings", "system").authorizedRoots, []);
     for (const stage of ["requirement", "prototype", "prd", "review"]) {
       const id = s.get("settings", "system").defaults.skills[stage];

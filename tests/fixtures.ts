@@ -34,7 +34,13 @@ export class MockRuntime implements AgentRuntime {
   fail = false;
   async run(input: AgentInput, host: AgentHost) {
     this.calls.push(input);
+    if (input.snapshot.chatOnly) return "Mock Codex 回复：" + input.prompt;
     await host.read("read_context", {});
+    if (input.snapshot.conversation && input.prompt === "你好 Codex") return "Mock 产品助手：你好，有什么想法？";
+    if (input.snapshot.conversation && input.prompt === "我想做一个奖励功能") {
+      await host.read("ask_question", { question: "奖励面向哪些用户？" });
+      return "奖励面向哪些用户？";
+    }
     if (this.delay)
       await new Promise((resolve, reject) => {
         const t = setTimeout(resolve, this.delay);

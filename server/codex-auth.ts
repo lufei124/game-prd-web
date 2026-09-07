@@ -118,7 +118,9 @@ export async function codexStatus(root: string) {
 }
 export async function startCodexLogin(root: string) {
   check(!active.has(root), "请等待 Codex 任务结束后登录", 409);
-  if (logins.get(root)?.state === "waiting") return codexStatus(root);
+  const current = await codexStatus(root);
+  if (current.state === "configured" || logins.get(root)?.state === "waiting")
+    return current;
   const binary = codexBinary();
   check(binary, "未找到 Codex CLI", 409);
   check(

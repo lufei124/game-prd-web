@@ -1,8 +1,11 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join, extname, basename } from "node:path";
 import { Store, uid, now, check, hash } from "./db.ts";
+import { KnowledgeTree } from "./knowledge-tree.ts";
 export class Knowledge {
-  constructor(public s: Store) {}
+  constructor(public s: Store) {
+    new KnowledgeTree(s).migrate();
+  }
   async import(
     projectId: string,
     requirementId: string | null,
@@ -11,8 +14,9 @@ export class Knowledge {
     source: string,
     module = "general",
     state = "pending",
+    folderId: string | null = null,
   ) {
-    this.s.get("project", projectId);
+    new KnowledgeTree(this.s).folder(projectId, folderId);
     if (requirementId)
       check(
         this.s.get("requirement", requirementId).projectId === projectId,
@@ -71,6 +75,7 @@ export class Knowledge {
       name: basename(name),
       source,
       module,
+      folderId,
       state,
       version: previous.length + 1,
       hash: hash(bytes.toString("base64")),
@@ -96,6 +101,7 @@ export class Knowledge {
     return (items || this.s.all("knowledge"))
       .filter(
         (x) =>
+          !x.deletedAt &&
           x.projectId === projectId &&
           (!x.requirementId || x.requirementId === requirementId) &&
           x.status === "parsed",
@@ -118,13 +124,18 @@ export class Knowledge {
   conflicts(projectId: string) {
     const items = this.s
       .all("knowledge")
-      .filter((x) => x.projectId === projectId);
+      .filter((x) => x.projectId === projectId && !x.deletedAt);
     const pairs: any[] = [];
     for (let i = 0; i < items.length; i++)
       for (let j = i + 1; j < items.length; j++) {
         const a = items[i],
           b = items[j];
-        if (a.module === b.module && a.name === b.name && a.hash !== b.hash)
+        if (
+          a.folderId === b.folderId &&
+          a.module === b.module &&
+          a.name === b.name &&
+          a.hash !== b.hash
+        )
           pairs.push({
             left: a.id,
             right: b.id,
