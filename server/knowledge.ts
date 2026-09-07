@@ -5,7 +5,8 @@ import { KnowledgeTree } from "./knowledge-tree.ts";
 
 function queryTerms(query: string) {
   const lower = query.toLowerCase();
-  const words = lower.match(/[a-z0-9][a-z0-9._-]+|[\u4e00-\u9fff]{2,8}/g) || [];
+  const words =
+    lower.match(/[a-z0-9][a-z0-9._-]+|[\u4e00-\u9fff]{2,8}/g) || [];
   const han = lower.match(/[\u4e00-\u9fff]+/g) || [];
   const bigrams = han.flatMap((run) =>
     run.length < 2
@@ -87,15 +88,38 @@ export class Knowledge {
         403,
       );
     check(bytes.length <= 20 * 1024 * 1024, "资料不得超过 20MB");
+
+    const fileName = basename(name);
+    const contentHash = hash(bytes.toString("base64"));
+    const previous = this.s
+      .all("knowledge")
+      .filter(
+        (x) =>
+          x.projectId === projectId &&
+          x.requirementId === requirementId &&
+          x.source === source &&
+          x.name === fileName,
+      )
+      .sort((a, b) => (a.version || 0) - (b.version || 0));
+    const latest = previous.at(-1);
+
+    // A source sync is idempotent: identical source bytes do not create another
+    // database version or another copy of the same file. Historical task
+    // snapshots keep referencing the previous immutable record.
+    if (latest && !latest.deletedAt && latest.hash === contentHash)
+      return { ...latest, unchanged: true };
+
     const id = uid();
     await mkdir(join(this.s.root, "files"), { recursive: true, mode: 0o700 });
     await writeFile(join(this.s.root, "files", id), bytes, { mode: 0o600 });
+
     let text = "",
       status = "parsed",
       error = "";
     const ext = extname(name).toLowerCase();
     try {
-      if ([".md", ".txt", ".csv"].includes(ext)) text = bytes.toString("utf8");
+      if ([".md", ".txt", ".csv"].includes(ext))
+        text = bytes.toString("utf8");
       else if (ext === ".docx") {
         const mammoth = await import("mammoth");
         text = (await mammoth.extractRawText({ buffer: bytes })).value;
@@ -113,7 +137,8 @@ export class Knowledge {
         }
       } else if ([".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(ext)) {
         status = "image";
-        error = "保留图片原文件；文本索引未理解图像。可作为显式视觉参考读取。";
+        error =
+          "保留图片原文件；文本索引未理解图像。可作为显式视觉参考读取。";
       } else {
         status = "unparsed";
         error = "暂不支持此格式的文本解析";
@@ -122,26 +147,18 @@ export class Knowledge {
       status = "failed";
       error = e instanceof Error ? e.message : "解析失败";
     }
-    const previous = this.s
-      .all("knowledge")
-      .filter(
-        (x) =>
-          x.projectId === projectId &&
-          x.requirementId === requirementId &&
-          x.source === source &&
-          x.name === basename(name),
-      );
+
     const item = {
       id,
       projectId,
       requirementId,
-      name: basename(name),
+      name: fileName,
       source,
       module,
       folderId,
       state,
-      version: previous.length + 1,
-      hash: hash(bytes.toString("base64")),
+      version: (latest?.version || 0) + 1,
+      hash: contentHash,
       text,
       status,
       error,
@@ -168,13 +185,12 @@ export class Knowledge {
         x.status === "parsed",
     );
 
-    // Only the newest version of the same logical source participates in live
-    // retrieval. Older versions remain in storage for historical task snapshots.
     const latest = new Map<string, any>();
     for (const item of sourceItems) {
       const key = `${item.requirementId || "project"}|${item.source}|${item.name}`;
       const current = latest.get(key);
-      if (!current || (current.version || 0) < (item.version || 0)) latest.set(key, item);
+      if (!current || (current.version || 0) < (item.version || 0))
+        latest.set(key, item);
     }
 
     return [...latest.values()]
