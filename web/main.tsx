@@ -170,7 +170,7 @@ function App() {
     [taskModel, setTaskModel] = useState(""),
     [reasoningEffort, setReasoningEffort] = useState(""),
     [referenceIds, setReferenceIds] = useState<string[]>([]),
-    [showConfig, setShowConfig] = useState(true);
+    [showConfig, setShowConfig] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const initialLoad = useRef(true);
   const reload = async () => {
@@ -1198,329 +1198,6 @@ function App() {
                   </button>
                 ))}
               </aside>
-              <section className="artifact-panel">
-                <div className="artifact-toolbar">
-                  <div className="artifact-title">
-                    {kind === "prototype" ? (
-                      <Monitor size={18} />
-                    ) : (
-                      <FileText size={18} />
-                    )}
-                    <b>{labels[kind]}</b>
-                    {version && <span className="pill">v{version.number}</span>}
-                    {dirty && <small className="unsaved">未保存</small>}
-                  </div>
-                  <div>
-                    {kind === "prototype" && (
-                      <button onClick={() => setPreview(!preview)}>
-                        {preview ? "源码" : "预览"}
-                      </button>
-                    )}
-                    {version && (
-                      <a
-                        className="button icon"
-                        title="导出当前版本"
-                        href={"/api/versions/" + version.id + "/export"}
-                      >
-                        <Download size={16} />
-                      </a>
-                    )}
-                    <button disabled={!dirty || busy} onClick={save}>
-                      <Check size={15} />
-                      保存版本
-                    </button>
-                  </div>
-                </div>
-                {chosenVersion && chosenVersion !== req.heads[kind] && (
-                  <div className="banner warning">
-                    正在查看历史版本。
-                    <button
-                      onClick={() =>
-                        trusted(
-                          "恢复历史版本",
-                          "恢复会创建一个新版本，不会抹除历史或自动重新确认。",
-                          async () => {
-                            await api(
-                              "/requirements/" + requirementId + "/restore",
-                              "POST",
-                              {
-                                versionId: version.id,
-                                base: req.heads[kind] || null,
-                              },
-                            );
-                            setChosenVersion("");
-                          },
-                        )
-                      }
-                    >
-                      <RotateCcw size={14} />
-                      恢复为新版本
-                    </button>
-                  </div>
-                )}
-                {kind === "prototype" && preview ? (
-                  version ? (
-                    <div className="prototype-wrap">
-                      <div className="preview-top">
-                        <span />
-                        <span />
-                        <span />
-                        <small>隔离交互预览 · 禁止网络与工作台接口</small>
-                      </div>
-                      <iframe
-                        title="交互原型预览"
-                        sandbox="allow-scripts"
-                        src={"/api/versions/" + version.id + "/preview"}
-                        key={version.id}
-                      />
-                    </div>
-                  ) : (
-                    <div className="artifact-empty">
-                      <div className="empty-symbol">
-                        <Monitor size={42} />
-                        <Sparkles size={19} />
-                      </div>
-                      <h2>让需求变成可体验的页面</h2>
-                      <p>
-                        在右侧选择生成方式与风格，描述要展示的流程。
-                        <br />
-                        生成后可点击体验、批注和局部修改。
-                      </p>
-                      <button onClick={() => setShowConfig(true)}>
-                        <Palette size={16} />
-                        选择生成配置
-                      </button>
-                    </div>
-                  )
-                ) : kind === "review" && version ? (
-                  <div className="review-pane">
-                    <h2>评审结论</h2>
-                    <p>{version.metadata.summary}</p>
-                    {version.metadata.issues?.length === 0 && (
-                      <div className="notice">
-                        <CheckCircle2 size={18} />
-                        本次评审未报告问题，仍需用户确认终稿。
-                      </div>
-                    )}
-                    {version.metadata.issues?.map((issue: any) => (
-                      <article className="review-issue" key={issue.id}>
-                        <span className={"pill " + issue.severity}>
-                          {issue.severity} · {issue.id}
-                        </span>
-                        <h3>{issue.description}</h3>
-                        <p>{issue.suggestion}</p>
-                        {ws.resolutions.some(
-                          (x: any) =>
-                            x.reviewId === version.id && x.issueId === issue.id,
-                        ) ? (
-                          <span className="success">已记录用户裁决</span>
-                        ) : (
-                          <button
-                            onClick={() =>
-                              open({
-                                title: "处理评审问题 " + issue.id,
-                                description: issue.description,
-                                fields: [
-                                  {
-                                    name: "decision",
-                                    label: "处理结果 / 裁决依据",
-                                    type: "textarea",
-                                    required: true,
-                                  },
-                                ],
-                                action: async (v) => {
-                                  await api(
-                                    "/reviews/" + version.id + "/resolve",
-                                    "POST",
-                                    { issueId: issue.id, decision: v.decision },
-                                  );
-                                },
-                              })
-                            }
-                          >
-                            记录处理结果
-                          </button>
-                        )}
-                      </article>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="editor-container">
-                    <div className="editor-meta">
-                      {kind === "requirement"
-                        ? "记录目标、范围、核心规则与待确认问题。"
-                        : kind === "prd"
-                          ? "Markdown 文档 · 支持选中文本交给 AI 修改"
-                          : "可编辑原始内容"}
-                      <span>本地草稿自动保留</span>
-                    </div>
-                    <textarea
-                      ref={textarea}
-                      className={
-                        "document-editor " +
-                        (kind === "prototype" ? "code" : "")
-                      }
-                      aria-label={labels[kind] + "编辑器"}
-                      spellCheck={false}
-                      value={editor}
-                      onChange={(e) => setDraft(e.target.value)}
-                      onSelect={(e) => {
-                        const t = e.currentTarget;
-                        setSelectedText(
-                          t.value.slice(t.selectionStart, t.selectionEnd),
-                        );
-                      }}
-                      placeholder={
-                        kind === "requirement"
-                          ? "# 需求说明\n\n我们希望解决什么问题？\n\n## 用户与场景\n\n## 核心规则\n\n## 待确认事项"
-                          : kind === "prd"
-                            ? "粘贴已有 Markdown PRD，或在确认原型后让产品助手起草。"
-                            : kind === "review"
-                              ? '手动评审 JSON：{"summary":"评审结论","issues":[]}'
-                              : "粘贴包含 prototype-meta 的自包含 HTML"
-                      }
-                    />
-                  </div>
-                )}
-                <div className="artifact-bottom">
-                  <span>
-                    {version
-                      ? `更新于 ${fmt(version.createdAt)}`
-                      : "尚未生成成果"}
-                    {selectedText && ` · 已选中 ${selectedText.length} 字`}
-                  </span>
-                  <div>
-                    {["requirement", "prototype"].includes(kind) &&
-                      version &&
-                      req.heads[kind] === version.id && (
-                        <button
-                          className="primary"
-                          disabled={dirty || req.confirmed[kind] === version.id}
-                          onClick={confirm}
-                        >
-                          <CheckCheck size={16} />
-                          {req.confirmed[kind] === version.id
-                            ? "此版本已确认"
-                            : "确认" + labels[kind]}
-                        </button>
-                      )}
-                    {kind === "requirement" && req.confirmed.requirement && (
-                      <button
-                        onClick={() =>
-                          open({
-                            title: "确认无需原型",
-                            description:
-                              "仅适用于无 UI / 交互变化的需求。此确认将绑定当前需求版本。",
-                            fields: [
-                              {
-                                name: "reason",
-                                label: "无需原型的依据",
-                                type: "textarea",
-                                required: true,
-                              },
-                            ],
-                            action: async (v) => {
-                              await api(
-                                "/requirements/" + requirementId + "/waive",
-                                "POST",
-                                {
-                                  versionId: req.heads.requirement,
-                                  reason: v.reason,
-                                },
-                              );
-                            },
-                          })
-                        }
-                      >
-                        无需原型
-                      </button>
-                    )}
-                    {kind === "prototype" && version && (
-                      <button
-                        onClick={() =>
-                          open({
-                            title: "添加页面批注",
-                            fields: [
-                              {
-                                name: "pageId",
-                                label: "页面",
-                                type: "select",
-                                options: version.metadata.pages.map(
-                                  (p: any) => ({ value: p.id, label: p.name }),
-                                ),
-                              },
-                              {
-                                name: "text",
-                                label: "批注",
-                                type: "textarea",
-                                required: true,
-                              },
-                            ],
-                            action: async (v) => {
-                              await api(
-                                "/requirements/" +
-                                  requirementId +
-                                  "/annotations",
-                                "POST",
-                                { ...v, versionId: version.id },
-                              );
-                            },
-                          })
-                        }
-                      >
-                        <MessageSquare size={15} />
-                        批注
-                      </button>
-                    )}
-                    {kind === "prd" && req.stale && version && (
-                      <button
-                        onClick={() =>
-                          trusted(
-                            "确认 PRD 已核对同步",
-                            "请核对当前原型与需求。确认后会创建绑定当前上游版本的新 PRD，旧版仍保留。",
-                            async () => {
-                              await api(
-                                "/requirements/" + requirementId + "/sync-prd",
-                                "POST",
-                                { versionId: version.id },
-                              );
-                              setChosenVersion("");
-                            },
-                          )
-                        }
-                      >
-                        核对并同步
-                      </button>
-                    )}
-                    {kind === "prd" && version && (
-                      <button
-                        className="primary"
-                        disabled={
-                          dirty || req.stale || req.finalVersion === version.id
-                        }
-                        onClick={() =>
-                          trusted(
-                            "确认 PRD 终稿",
-                            `将 v${version.number} 标记为终稿；飞书发布状态独立保存。`,
-                            async () => {
-                              await api(
-                                "/requirements/" + requirementId + "/finalize",
-                                "POST",
-                                { versionId: version.id },
-                              );
-                            },
-                          )
-                        }
-                      >
-                        <CheckCheck size={15} />
-                        {req.finalVersion === version.id
-                          ? "已是终稿"
-                          : "确认终稿"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </section>
               <aside className="agent-panel">
                 <div className="agent-heading">
                   <span className="assistant-icon">
@@ -2107,6 +1784,329 @@ function App() {
                   </small>
                 </div>
               </aside>
+              <section className="artifact-panel">
+                <div className="artifact-toolbar">
+                  <div className="artifact-title">
+                    {kind === "prototype" ? (
+                      <Monitor size={18} />
+                    ) : (
+                      <FileText size={18} />
+                    )}
+                    <b>{labels[kind]}</b>
+                    {version && <span className="pill">v{version.number}</span>}
+                    {dirty && <small className="unsaved">未保存</small>}
+                  </div>
+                  <div>
+                    {kind === "prototype" && (
+                      <button onClick={() => setPreview(!preview)}>
+                        {preview ? "源码" : "预览"}
+                      </button>
+                    )}
+                    {version && (
+                      <a
+                        className="button icon"
+                        title="导出当前版本"
+                        href={"/api/versions/" + version.id + "/export"}
+                      >
+                        <Download size={16} />
+                      </a>
+                    )}
+                    <button disabled={!dirty || busy} onClick={save}>
+                      <Check size={15} />
+                      保存版本
+                    </button>
+                  </div>
+                </div>
+                {chosenVersion && chosenVersion !== req.heads[kind] && (
+                  <div className="banner warning">
+                    正在查看历史版本。
+                    <button
+                      onClick={() =>
+                        trusted(
+                          "恢复历史版本",
+                          "恢复会创建一个新版本，不会抹除历史或自动重新确认。",
+                          async () => {
+                            await api(
+                              "/requirements/" + requirementId + "/restore",
+                              "POST",
+                              {
+                                versionId: version.id,
+                                base: req.heads[kind] || null,
+                              },
+                            );
+                            setChosenVersion("");
+                          },
+                        )
+                      }
+                    >
+                      <RotateCcw size={14} />
+                      恢复为新版本
+                    </button>
+                  </div>
+                )}
+                {kind === "prototype" && preview ? (
+                  version ? (
+                    <div className="prototype-wrap">
+                      <div className="preview-top">
+                        <span />
+                        <span />
+                        <span />
+                        <small>隔离交互预览 · 禁止网络与工作台接口</small>
+                      </div>
+                      <iframe
+                        title="交互原型预览"
+                        sandbox="allow-scripts"
+                        src={"/api/versions/" + version.id + "/preview"}
+                        key={version.id}
+                      />
+                    </div>
+                  ) : (
+                    <div className="artifact-empty">
+                      <div className="empty-symbol">
+                        <Monitor size={42} />
+                        <Sparkles size={19} />
+                      </div>
+                      <h2>让需求变成可体验的页面</h2>
+                      <p>
+                        在右侧选择生成方式与风格，描述要展示的流程。
+                        <br />
+                        生成后可点击体验、批注和局部修改。
+                      </p>
+                      <button onClick={() => setShowConfig(true)}>
+                        <Palette size={16} />
+                        选择生成配置
+                      </button>
+                    </div>
+                  )
+                ) : kind === "review" && version ? (
+                  <div className="review-pane">
+                    <h2>评审结论</h2>
+                    <p>{version.metadata.summary}</p>
+                    {version.metadata.issues?.length === 0 && (
+                      <div className="notice">
+                        <CheckCircle2 size={18} />
+                        本次评审未报告问题，仍需用户确认终稿。
+                      </div>
+                    )}
+                    {version.metadata.issues?.map((issue: any) => (
+                      <article className="review-issue" key={issue.id}>
+                        <span className={"pill " + issue.severity}>
+                          {issue.severity} · {issue.id}
+                        </span>
+                        <h3>{issue.description}</h3>
+                        <p>{issue.suggestion}</p>
+                        {ws.resolutions.some(
+                          (x: any) =>
+                            x.reviewId === version.id && x.issueId === issue.id,
+                        ) ? (
+                          <span className="success">已记录用户裁决</span>
+                        ) : (
+                          <button
+                            onClick={() =>
+                              open({
+                                title: "处理评审问题 " + issue.id,
+                                description: issue.description,
+                                fields: [
+                                  {
+                                    name: "decision",
+                                    label: "处理结果 / 裁决依据",
+                                    type: "textarea",
+                                    required: true,
+                                  },
+                                ],
+                                action: async (v) => {
+                                  await api(
+                                    "/reviews/" + version.id + "/resolve",
+                                    "POST",
+                                    { issueId: issue.id, decision: v.decision },
+                                  );
+                                },
+                              })
+                            }
+                          >
+                            记录处理结果
+                          </button>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="editor-container">
+                    <div className="editor-meta">
+                      {kind === "requirement"
+                        ? "记录目标、范围、核心规则与待确认问题。"
+                        : kind === "prd"
+                          ? "Markdown 文档 · 支持选中文本交给 AI 修改"
+                          : "可编辑原始内容"}
+                      <span>本地草稿自动保留</span>
+                    </div>
+                    <textarea
+                      ref={textarea}
+                      className={
+                        "document-editor " +
+                        (kind === "prototype" ? "code" : "")
+                      }
+                      aria-label={labels[kind] + "编辑器"}
+                      spellCheck={false}
+                      value={editor}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onSelect={(e) => {
+                        const t = e.currentTarget;
+                        setSelectedText(
+                          t.value.slice(t.selectionStart, t.selectionEnd),
+                        );
+                      }}
+                      placeholder={
+                        kind === "requirement"
+                          ? "# 需求说明\n\n我们希望解决什么问题？\n\n## 用户与场景\n\n## 核心规则\n\n## 待确认事项"
+                          : kind === "prd"
+                            ? "粘贴已有 Markdown PRD，或在确认原型后让产品助手起草。"
+                            : kind === "review"
+                              ? '手动评审 JSON：{"summary":"评审结论","issues":[]}'
+                              : "粘贴包含 prototype-meta 的自包含 HTML"
+                      }
+                    />
+                  </div>
+                )}
+                <div className="artifact-bottom">
+                  <span>
+                    {version
+                      ? `更新于 ${fmt(version.createdAt)}`
+                      : "尚未生成成果"}
+                    {selectedText && ` · 已选中 ${selectedText.length} 字`}
+                  </span>
+                  <div>
+                    {["requirement", "prototype"].includes(kind) &&
+                      version &&
+                      req.heads[kind] === version.id && (
+                        <button
+                          className="primary"
+                          disabled={dirty || req.confirmed[kind] === version.id}
+                          onClick={confirm}
+                        >
+                          <CheckCheck size={16} />
+                          {req.confirmed[kind] === version.id
+                            ? "此版本已确认"
+                            : "确认" + labels[kind]}
+                        </button>
+                      )}
+                    {kind === "requirement" && req.confirmed.requirement && (
+                      <button
+                        onClick={() =>
+                          open({
+                            title: "确认无需原型",
+                            description:
+                              "仅适用于无 UI / 交互变化的需求。此确认将绑定当前需求版本。",
+                            fields: [
+                              {
+                                name: "reason",
+                                label: "无需原型的依据",
+                                type: "textarea",
+                                required: true,
+                              },
+                            ],
+                            action: async (v) => {
+                              await api(
+                                "/requirements/" + requirementId + "/waive",
+                                "POST",
+                                {
+                                  versionId: req.heads.requirement,
+                                  reason: v.reason,
+                                },
+                              );
+                            },
+                          })
+                        }
+                      >
+                        无需原型
+                      </button>
+                    )}
+                    {kind === "prototype" && version && (
+                      <button
+                        onClick={() =>
+                          open({
+                            title: "添加页面批注",
+                            fields: [
+                              {
+                                name: "pageId",
+                                label: "页面",
+                                type: "select",
+                                options: version.metadata.pages.map(
+                                  (p: any) => ({ value: p.id, label: p.name }),
+                                ),
+                              },
+                              {
+                                name: "text",
+                                label: "批注",
+                                type: "textarea",
+                                required: true,
+                              },
+                            ],
+                            action: async (v) => {
+                              await api(
+                                "/requirements/" +
+                                  requirementId +
+                                  "/annotations",
+                                "POST",
+                                { ...v, versionId: version.id },
+                              );
+                            },
+                          })
+                        }
+                      >
+                        <MessageSquare size={15} />
+                        批注
+                      </button>
+                    )}
+                    {kind === "prd" && req.stale && version && (
+                      <button
+                        onClick={() =>
+                          trusted(
+                            "确认 PRD 已核对同步",
+                            "请核对当前原型与需求。确认后会创建绑定当前上游版本的新 PRD，旧版仍保留。",
+                            async () => {
+                              await api(
+                                "/requirements/" + requirementId + "/sync-prd",
+                                "POST",
+                                { versionId: version.id },
+                              );
+                              setChosenVersion("");
+                            },
+                          )
+                        }
+                      >
+                        核对并同步
+                      </button>
+                    )}
+                    {kind === "prd" && version && (
+                      <button
+                        className="primary"
+                        disabled={
+                          dirty || req.stale || req.finalVersion === version.id
+                        }
+                        onClick={() =>
+                          trusted(
+                            "确认 PRD 终稿",
+                            `将 v${version.number} 标记为终稿；飞书发布状态独立保存。`,
+                            async () => {
+                              await api(
+                                "/requirements/" + requirementId + "/finalize",
+                                "POST",
+                                { versionId: version.id },
+                              );
+                            },
+                          )
+                        }
+                      >
+                        <CheckCheck size={15} />
+                        {req.finalVersion === version.id
+                          ? "已是终稿"
+                          : "确认终稿"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         )}

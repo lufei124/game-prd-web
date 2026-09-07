@@ -10,3 +10,17 @@ playwright-report/
 test-results/
 coverage/
 backups/
+
+# 本地上传、数据库与执行器凭证（包括误放在根目录的运行数据）
+/uploads/
+/files/
+/codex-auth/
+/codex-home/
+/codex-work/
+/agent-home/
+/agent-work/
+/agent-tmp/
+/delivery/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

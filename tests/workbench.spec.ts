@@ -70,6 +70,7 @@ test("browser full flow: create project, knowledge, confirm, two clickable style
     .click();
   await expect(frame.getByText("网络异常", { exact: true })).toBeVisible();
   await frame.getByRole("button", { name: "重试", exact: true }).click();
+  await page.getByRole("button", { name: "任务配置", exact: true }).click();
   await page
     .getByLabel("视觉风格", { exact: true })
     .selectOption({ label: "墨色编辑风格" });
@@ -260,6 +261,7 @@ test("Codex defaults, model/depth persistence, Chinese Skills and project trash 
     .getByRole("dialog")
     .getByRole("button", { name: "保存", exact: true })
     .click();
+  await page.getByRole("button", { name: "任务配置", exact: true }).click();
   await expect(page.getByLabel("产品助手", { exact: true })).toHaveValue(
     "codex",
   );
@@ -399,25 +401,44 @@ test("central assistant layout, subscription login UI and permanent recycle-bin 
     ),
   );
   expect(draftKey).toBeTruthy();
-  await page.getByRole("button", { name: "选择本次任务模型与思考深度" }).click();
+  await page
+    .getByRole("button", { name: "选择本次任务模型与思考深度" })
+    .click();
   await dialog(page, "模型 ID", "gpt-6-astra");
-  await page.getByRole("dialog").getByLabel("思考深度", { exact: true }).selectOption("low");
-  await page.getByRole("dialog").getByRole("button", { name: "保存", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByLabel("思考深度", { exact: true })
+    .selectOption("low");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "保存", exact: true })
+    .click();
   await expect(page.locator(".composer-model")).toContainText("6 astra");
   await expect(page.locator(".composer-model")).toContainText("低");
-  await expect(page.getByLabel("任务模型", { exact: true })).toHaveValue("gpt-6-astra");
-  await expect(page.getByLabel("任务思考深度", { exact: true })).toHaveValue("low");
-  await page.getByRole("textbox", { name: "给产品助手的任务" }).fill("梳理这个需求的页面流程与验收标准");
+  await page.getByRole("button", { name: "任务配置", exact: true }).click();
+  await expect(page.getByLabel("任务模型", { exact: true })).toHaveValue(
+    "gpt-6-astra",
+  );
+  await expect(page.getByLabel("任务思考深度", { exact: true })).toHaveValue(
+    "low",
+  );
+  await page.getByRole("button", { name: "任务配置", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "给产品助手的任务" })
+    .fill("梳理这个需求的页面流程与验收标准");
   await page.screenshot({ path: "test-results/central-composer.png" });
   const artifact = await page.locator(".artifact-panel").boundingBox(),
     assistant = await page.locator(".agent-panel").boundingBox();
   expect(artifact).toBeTruthy();
   expect(assistant).toBeTruthy();
-  expect(Math.abs(artifact!.x - assistant!.x)).toBeLessThan(2);
-  expect(Math.abs(artifact!.width - assistant!.width)).toBeLessThan(2);
-  expect(assistant!.y).toBeGreaterThanOrEqual(
-    artifact!.y + artifact!.height - 2,
+  expect(artifact!.x).toBeGreaterThanOrEqual(
+    assistant!.x + assistant!.width - 2,
   );
+  expect(Math.abs(artifact!.width - assistant!.width)).toBeLessThan(2);
+  expect(Math.abs(assistant!.y - artifact!.y)).toBeLessThan(2);
+  expect(Math.abs(assistant!.height - artifact!.height)).toBeLessThan(2);
+  const conversation = await page.locator(".agent-scroll").boundingBox();
+  expect(conversation!.height).toBeGreaterThan(250);
   await expect(
     page.getByRole("textbox", { name: "给产品助手的任务" }),
   ).toBeInViewport();
