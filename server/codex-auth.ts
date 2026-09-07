@@ -2,6 +2,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import {
   mkdir,
   mkdtemp,
@@ -9,11 +10,16 @@ import {
   writeFile,
   rm,
   rename,
+  readdir,
+  copyFile,
+  lstat,
 } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { check } from "./db.ts";
+
 const exec = promisify(execFile);
 const require = createRequire(import.meta.url);
+
 export function codexBinary() {
   if (process.env.WORKBENCH_CODEX_BINARY)
     return resolve(process.env.WORKBENCH_CODEX_BINARY);
@@ -30,6 +36,7 @@ export function codexBinary() {
     return undefined;
   }
 }
+
 export const codexAuthMode = () =>
   process.env.WORKBENCH_CODEX_AUTH_MODE === "api-key"
     ? "api-key"
@@ -40,6 +47,7 @@ export const authEnv = (home: string) => ({
   HOME: home,
   CODEX_HOME: home,
 });
+
 const logins = new Map<
   string,
   {
@@ -52,13 +60,63 @@ const logins = new Map<
   }
 >();
 const active = new Set<string>();
+
+function desktopSkillsRoot() {
+  if (process.env.WORKBENCH_CODEX_SKILLS_DIR)
+    return resolve(process.env.WORKBENCH_CODEX_SKILLS_DIR);
+  return join(process.env.HOME || homedir(), ".codex", "skills");
+}
+
+async function copySkillsTree(source: string, target: string) {
+  let files = 0;
+  let bytes = 0;
+  const walk = async (src: string, dst: string) => {
+    await mkdir(dst, { recursive: true, mode: 0o700 });
+    for (const entry of await readdir(src, { withFileTypes: true })) {
+      const from = join(src, entry.name);
+      const to = join(dst, entry.name);
+      const stat = await lstat(from);
+      // Do not carry symlinks/devices from the user's home into the isolated
+      // runtime. A skill remains discoverable from its regular files.
+      if (stat.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        await walk(from, to);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      files++;
+      bytes += stat.size;
+      check(files <= 5000, "本机 Codex Skills 文件过多，请精简后重试", 409);
+      check(bytes <= 100 * 1024 * 1024, "本机 Codex Skills 总大小超过 100MB", 409);
+      await copyFile(from, to);
+    }
+  };
+  await walk(source, target);
+  return { files, bytes };
+}
+
+export async function syncLocalCodexSkills(home: string) {
+  const source = desktopSkillsRoot();
+  const target = join(home, "skills");
+  await rm(target, { recursive: true, force: true });
+  if (!existsSync(source)) return { source, files: 0, bytes: 0 };
+  const copied = await copySkillsTree(source, target);
+  return { source, ...copied };
+}
+
 export async function codexStatus(root: string) {
   const binary = codexBinary(),
     mode = codexAuthMode();
+  const skillRoot = desktopSkillsRoot();
   const base = {
     mode,
     home: authHome(root),
     binary: binary || null,
+    skills: {
+      source: skillRoot,
+      available: existsSync(skillRoot),
+      behavior: "每个任务启动时只读复制到隔离 CODEX_HOME/skills；工作台不维护 Skill 列表",
+    },
     permissions: "独立登录；仅当前任务目录可写，禁止读取其他项目",
     login: logins.get(root)
       ? (({ child, done, ...state }) => state)(logins.get(root)!)
@@ -106,7 +164,7 @@ export async function codexStatus(root: string) {
     return {
       ...base,
       state: "configured",
-      detail: "订阅登录已就绪；可用额度与模型由账号决定，真实模型调用待实测",
+      detail: "订阅登录已就绪；本机 Codex Skills 会在任务启动时同步到隔离环境",
     };
   } catch {
     return {
@@ -116,10 +174,14 @@ export async function codexStatus(root: string) {
     };
   }
 }
+
 export async function startCodexLogin(root: string) {
   check(!active.has(root), "请等待 Codex 任务结束后登录", 409);
   const current = await codexStatus(root);
-  if (current.state === "configured" || logins.get(root)?.state === "waiting")
+  if (
+    current.state === "configured" ||
+    logins.get(root)?.state === "waiting"
+  )
     return current;
   const binary = codexBinary();
   check(binary, "未找到 Codex CLI", 409);
@@ -204,6 +266,7 @@ export async function startCodexLogin(root: string) {
   });
   return codexStatus(root);
 }
+
 export async function logoutCodex(root: string) {
   check(!active.has(root), "请等待 Codex 任务结束后退出登录", 409);
   const login = logins.get(root);
@@ -216,6 +279,7 @@ export async function logoutCodex(root: string) {
   await rm(join(authHome(root), "auth.json"), { force: true });
   return codexStatus(root);
 }
+
 // Serialize subscription executions so refresh-token rotation cannot race between isolated homes.
 export async function withCodexAuth<T>(
   root: string,
@@ -223,6 +287,9 @@ export async function withCodexAuth<T>(
   signal: AbortSignal,
   run: () => Promise<T>,
 ) {
+  signal.throwIfAborted();
+  await mkdir(home, { recursive: true, mode: 0o700 });
+  await syncLocalCodexSkills(home);
   if (codexAuthMode() === "api-key") return run();
   check(logins.get(root)?.state !== "waiting", "请先完成订阅登录", 409);
   check(
@@ -236,7 +303,6 @@ export async function withCodexAuth<T>(
   let copied = false;
   try {
     signal.throwIfAborted();
-    await mkdir(home, { recursive: true, mode: 0o700 });
     await writeFile(target, await readFile(source), { mode: 0o600 });
     copied = true;
     return await run();
