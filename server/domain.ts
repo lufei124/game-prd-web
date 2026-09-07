@@ -418,9 +418,12 @@ export class Domain {
     while (current && current.kind === "prd" && !ids.has(current.id)) {
       ids.add(current.id);
       if (!current.parentId) break;
-      const parent = this.s.maybe<Version>("version", current.parentId);
-      if (!parent || parent.kind !== "prd") break;
-      current = parent;
+      const parentVersion: Version | undefined = this.s.maybe<Version>(
+        "version",
+        current.parentId,
+      );
+      if (!parentVersion || parentVersion.kind !== "prd") break;
+      current = parentVersion;
     }
     return ids;
   }
@@ -435,8 +438,6 @@ export class Domain {
     );
     this.gate(r, "prd");
 
-    // Review is optional. If the final PRD descends from a reviewed PRD, retain
-    // that review lineage instead of incorrectly recording the flow as skipped.
     const lineage = this.prdLineage(versionId);
     const relevantReviews = this.versions(id)
       .filter(
