@@ -88,10 +88,10 @@ export class Tasks {
     if (body.conversation) {
       const waiting = this.s
         .all("task")
-        .filter(
-          (t) => t.requirementId === id && t.status === "waiting",
-        )
-        .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+        .filter((t) => t.requirementId === id && t.status === "waiting")
+        .sort((a, b) =>
+          String(b.updatedAt).localeCompare(String(a.updatedAt)),
+        )[0];
       if (waiting) {
         for (const q of this.s
           .all("question")
@@ -458,9 +458,7 @@ export class Tasks {
           this.s.put("task", {
             ...cur,
             sessionId,
-            sessionIds: [
-              ...new Set([...(cur.sessionIds || []), sessionId]),
-            ],
+            sessionIds: [...new Set([...(cur.sessionIds || []), sessionId])],
           });
         },
       };
@@ -596,8 +594,8 @@ export class Tasks {
   applyCandidate(id: string) {
     const t = this.s.get("task", id);
     check(t.snapshot?.previewOnly, "此任务不是预览候选", 409);
-    check(t.candidate && t.candidateReady, "候选尚未生成", 409);
     check(!t.resultId, "候选已经应用", 409);
+    check(t.candidate && t.candidateReady, "候选尚未生成", 409);
     this.assertUpstreamCurrent(t);
     const v = this.domain.save(
       t.requirementId,
@@ -707,7 +705,5 @@ export class Tasks {
 export function redact(s: string) {
   for (const key of ["WORKBENCH_ANTHROPIC_API_KEY", "WORKBENCH_CODEX_API_KEY"])
     if (process.env[key]) s = s.split(process.env[key]!).join("[redacted]");
-  return s
-    .replace(/sk-[a-zA-Z0-9_-]{12,}/g, "[redacted]")
-    .slice(0, 4000);
+  return s.replace(/sk-[a-zA-Z0-9_-]{12,}/g, "[redacted]").slice(0, 4000);
 }

@@ -148,7 +148,11 @@ export async function createApp(
     ],
     requirements: s
       .all("requirement")
-      .map((r) => ({ ...r, stage: domain.stage(r), conversationStage: domain.conversationStage(r) })),
+      .map((r) => ({
+        ...r,
+        stage: domain.stage(r),
+        conversationStage: domain.conversationStage(r),
+      })),
     extensions: extensions.list().map((e) => ({
       ...e,
       release: {
@@ -239,7 +243,11 @@ export async function createApp(
   route("get", "/api/requirements/:id", (r) => {
     const req = s.get("requirement", r.params.id);
     return {
-      requirement: { ...req, stage: domain.stage(req), conversationStage: domain.conversationStage(req) },
+      requirement: {
+        ...req,
+        stage: domain.stage(req),
+        conversationStage: domain.conversationStage(req),
+      },
       versions: domain.versions(req.id),
       tasks: s
         .all("task")
@@ -272,6 +280,9 @@ export async function createApp(
         .filter((x) => x.requirementId === req.id),
       confirmations: s
         .all("confirmation")
+        .filter((x) => x.requirementId === req.id),
+      reviewBriefs: s
+        .all("reviewBrief")
         .filter((x) => x.requirementId === req.id),
     };
   });
@@ -355,15 +366,39 @@ export async function createApp(
   });
   route("patch", "/api/requirements/:id/assistant", (r) => {
     const requirement = s.get("requirement", r.params.id);
-    const choices = z.object({
-      skills: z.object({ requirement: id.optional(), prototype: id.optional(), prd: id.optional(), review: id.optional() }).strict().default({}),
-      styleId: id.optional(), templateId: id.optional(),
-    }).strict().parse(r.body);
+    const choices = z
+      .object({
+        skills: z
+          .object({
+            requirement: id.optional(),
+            prototype: id.optional(),
+            prd: id.optional(),
+            review: id.optional(),
+          })
+          .strict()
+          .default({}),
+        styleId: id.optional(),
+        templateId: id.optional(),
+      })
+      .strict()
+      .parse(r.body);
     for (const [stage, extensionId] of Object.entries(choices.skills)) {
-      check(extensions.select(extensionId, requirement.projectId, stage).manifest.type === "skill", "请选择对应阶段的 Skill");
+      check(
+        extensions.select(extensionId, requirement.projectId, stage).manifest
+          .type === "skill",
+        "请选择对应阶段的 Skill",
+      );
     }
-    for (const [key, stage, type] of [["styleId", "prototype", "style"], ["templateId", "prd", "template"]] as const) {
-      if (choices[key]) check(extensions.select(choices[key], requirement.projectId, stage).manifest.type === type, "扩展类型不匹配");
+    for (const [key, stage, type] of [
+      ["styleId", "prototype", "style"],
+      ["templateId", "prd", "template"],
+    ] as const) {
+      if (choices[key])
+        check(
+          extensions.select(choices[key], requirement.projectId, stage).manifest
+            .type === type,
+          "扩展类型不匹配",
+        );
     }
     return s.put("requirement", { ...requirement, assistantDefaults: choices });
   });
@@ -388,6 +423,12 @@ export async function createApp(
   });
   route("post", "/api/tasks/:id/cancel", (r) => tasks.cancel(r.params.id));
   route("post", "/api/tasks/:id/retry", (r) => tasks.retry(r.params.id));
+  route("post", "/api/tasks/:id/apply-candidate", (r) =>
+    tasks.applyCandidate(r.params.id),
+  );
+  route("post", "/api/tasks/:id/discard-candidate", (r) =>
+    tasks.discardCandidate(r.params.id),
+  );
   route("post", "/api/tasks/:id/recover", (r) => {
     const t = s.get("task", r.params.id);
     check(
@@ -422,7 +463,12 @@ export async function createApp(
   });
   route("post", "/api/reviews/:id/resolve", (r) => {
     const v = s.get("version", r.params.id);
-    const b = z.object({ issueId: id, decision: text }).parse(r.body);
+    const b = z
+      .object({
+        issueId: id,
+        decision: z.enum(["采纳", "不采纳", "稍后处理"]),
+      })
+      .parse(r.body);
     check(
       v.kind === "review" &&
         v.metadata.issues.some((x: any) => x.id === b.issueId),
@@ -434,6 +480,31 @@ export async function createApp(
       requirementId: v.requirementId,
       ...b,
       actor: "user",
+      createdAt: now(),
+    });
+  });
+  route("post", "/api/requirements/:id/review-briefs", (r) => {
+    const req = s.get("requirement", r.params.id);
+    const b = z
+      .object({ prdVersionId: id, html: text.max(2_000_000) })
+      .strict()
+      .parse(r.body);
+    check(req.heads.prd === b.prdVersionId, "PRD 版本已变化", 409);
+    check(/<html[\s>]/i.test(b.html), "评审讲解必须是完整 HTML");
+    check(
+      !/<(?:iframe|object|embed|base)\b/i.test(b.html) &&
+        !/(?:src|href|action)\s*=\s*["']\s*(?:https?:)?\/\//i.test(b.html),
+      "评审讲解不允许外部网络资源",
+    );
+    const previous = s
+      .all("reviewBrief")
+      .filter((x) => x.requirementId === req.id);
+    return s.put("reviewBrief", {
+      id: uid(),
+      requirementId: req.id,
+      number: previous.length + 1,
+      prdVersionId: b.prdVersionId,
+      html: b.html,
       createdAt: now(),
     });
   });

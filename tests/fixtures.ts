@@ -39,14 +39,15 @@ export class MockRuntime implements AgentRuntime {
 
   async run(input: AgentInput, host: AgentHost) {
     this.calls.push(input);
-    if (input.snapshot.chatOnly) return "Mock Codex 回复：" + input.prompt;
+    if (input.snapshot.chatOnly) {
+      if (input.prompt.includes("产品需求评审会议"))
+        return '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>body{font-family:sans-serif}main{max-width:900px;margin:auto}</style></head><body><main><h1>每日奖励需求评审</h1><h2>背景与目标</h2><p>提升每日活跃。</p><h2>主流程</h2><p>进入 → 领取 → 成功反馈</p><h2>关键规则</h2><p>每日一次，重复请求幂等。</p><h2>异常边界</h2><p>网络失败可重试。</p><h2>评审关注点</h2><p>服务端幂等与跨日边界。</p></main><script>document.body.dataset.ready="yes"</script></body></html>';
+      return "Mock Codex 回复：" + input.prompt;
+    }
     await host.read("read_context", {});
     if (input.snapshot.conversation && input.prompt === "你好 Codex")
       return "Mock 产品助手：你好，有什么想法？";
-    if (
-      input.snapshot.conversation &&
-      input.prompt === "我想做一个奖励功能"
-    ) {
+    if (input.snapshot.conversation && input.prompt === "我想做一个奖励功能") {
       await host.read("ask_question", { question: "奖励面向哪些用户？" });
       return "奖励面向哪些用户？";
     }
@@ -72,9 +73,7 @@ export class MockRuntime implements AgentRuntime {
       content =
         "# 需求说明\n用户每天领取一次奖励。\n\n## 规则\n重复领取时不重复发奖。";
     if (input.kind === "prototype") {
-      const style = snap.releases.find(
-        (r: any) => r.manifest.type === "style",
-      );
+      const style = snap.releases.find((r: any) => r.manifest.type === "style");
       const instruction = style
         ? Buffer.from(style.files[style.main], "base64").toString()
         : "";
@@ -85,12 +84,25 @@ export class MockRuntime implements AgentRuntime {
         (v: any) => v.id === snap.heads.prototype,
       );
       if (base) {
-        patches = [
-          {
-            search: base.content.match(/<style[^>]*>[\s\S]*?<\/style>/)![0],
-            replace: content.match(/<style[^>]*>[\s\S]*?<\/style>/)![0],
-          },
-        ];
+        if (snap.conversation) {
+          const selectedButton = base.content.match(
+            /<button id="claim"[^>]*>领取奖励<\/button>/,
+          )![0];
+          patches = [
+            {
+              search: selectedButton,
+              replace:
+                '<button id="claim" style="float:right;margin-left:8px">领取奖励</button>',
+            },
+          ];
+        } else {
+          patches = [
+            {
+              search: base.content.match(/<style[^>]*>[\s\S]*?<\/style>/)![0],
+              replace: content.match(/<style[^>]*>[\s\S]*?<\/style>/)![0],
+            },
+          ];
+        }
       }
     }
     if (input.kind === "prd") {
@@ -105,15 +117,24 @@ export class MockRuntime implements AgentRuntime {
       content =
         "# 每日奖励\n" +
         sections
-          .map(
-            (h: string) =>
-              h + "\n用户每天可领取一次，服务端负责校验。",
-          )
+          .map((h: string) => h + "\n用户每天可领取一次，服务端负责校验。")
           .join("\n\n") +
         "\n\nR-001 每日一次。\nAC-001 对应 R-001：重复领取不发奖。\n异常：网络失败可以重试。";
     }
     if (input.kind === "review") {
-      meta = { summary: "TEST MOCK review", issues: [] };
+      meta = {
+        summary: "TEST MOCK review",
+        issues: input.snapshot.conversation
+          ? [
+              {
+                id: "review-rule",
+                severity: "major",
+                description: "需要明确跨日边界",
+                suggestion: "补充服务器时区和重置时刻",
+              },
+            ]
+          : [],
+      };
       content = JSON.stringify(meta);
     }
     await host.read("propose_artifact", {

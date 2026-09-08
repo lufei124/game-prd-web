@@ -92,13 +92,6 @@ const fmt = (value?: string) =>
         minute: "2-digit",
       })
     : "—";
-const safeJson = <T,>(raw: string | null, fallback: T): T => {
-  try {
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-};
 const titleFromPrompt = (prompt: string) =>
   (
     prompt
@@ -115,6 +108,14 @@ const downloadText = (name: string, content: string, type = "text/plain") => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 500);
 };
+
+const PREVIEW_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; font-src data:">`;
+
+function isolatedPreview(html: string) {
+  return /<head[\s>]/i.test(html)
+    ? html.replace(/<head([^>]*)>/i, `<head$1>${PREVIEW_CSP}`)
+    : PREVIEW_CSP + html;
+}
 
 function withInspector(html: string) {
   const inspector = `<script data-forge-inspector>(function(){
@@ -150,9 +151,10 @@ function withInspector(html: string) {
       enabled=false; box.style.display='none'; document.documentElement.style.cursor='';
     },true);
   })();</script>`;
-  return /<\/body>/i.test(html)
+  const instrumented = /<\/body>/i.test(html)
     ? html.replace(/<\/body>/i, inspector + "</body>")
     : html + inspector;
+  return isolatedPreview(instrumented);
 }
 
 function App() {
@@ -215,7 +217,10 @@ function App() {
     loadKnowledge(projectId).catch((e) => setError(e.message));
   }, [projectId]);
   useEffect(() => {
-    if (!requirementId) return setWorkspace(null);
+    if (!requirementId) {
+      setWorkspace(null);
+      return;
+    }
     loadWorkspace(requirementId).catch((e) => setError(e.message));
   }, [requirementId]);
   useEffect(() => {
@@ -313,6 +318,7 @@ function App() {
         <div className="rail-bottom">
           <label>当前项目</label>
           <select
+            aria-label="当前项目"
             value={projectId}
             onChange={(e) => {
               setProjectId(e.target.value);
@@ -489,11 +495,12 @@ function Workspace(props: any) {
   const [input, setInput] = useState("");
   const [selection, setSelection] = useState<SelectionTarget | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
-  const [dismissedCandidates, setDismissedCandidates] = useState<string[]>([]);
+  const [activeStage, setActiveStage] = useState<Stage>("requirement");
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const req = workspace?.requirement;
-  const stage: Stage = req?.conversationStage || "requirement";
+  const workflowStage: Stage = req?.conversationStage || "requirement";
+  const stage = activeStage;
   const versions = workspace?.versions || [];
   const head = (kind: Stage) =>
     versions.find((v: any) => v.id === req?.heads?.[kind]);
@@ -528,14 +535,20 @@ function Workspace(props: any) {
         t.candidateReady &&
         t.candidate?.content &&
         !t.resultId &&
-        t.base === prototypeVersion?.id &&
-        !dismissedCandidates.includes(t.id),
+        t.base === prototypeVersion?.id,
+    );
+  const showArtifact =
+    artifactOpen &&
+    Boolean(
+      (stage === "requirement" && requirementVersion) ||
+      (stage === "prototype" && prototypeVersion) ||
+      ((stage === "prd" || stage === "review") && prdVersion),
     );
 
   useEffect(() => {
     if (!req) return;
-    setArtifactOpen(Boolean(req.heads?.[stage] || req.heads?.requirement));
-  }, [req?.id, stage, req?.heads?.[stage]]);
+    setActiveStage(workflowStage);
+  }, [req?.id, workflowStage]);
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const payload = event.data;
@@ -559,18 +572,21 @@ function Workspace(props: any) {
   }, [selectionMode, prototypeVersion?.id, candidateTask?.id]);
 
   const toggleMaterial = (knowledgeId: string, checked: boolean) =>
-    run(async () => {
-      if (checked)
-        await api(`/requirements/${requirementId}/materials`, "POST", {
-          knowledgeId,
-        });
-      else
-        await api(
-          `/requirements/${requirementId}/materials/${knowledgeId}`,
-          "DELETE",
-          {},
-        );
-    }, checked ? "已设为重点资料" : "已取消重点资料");
+    run(
+      async () => {
+        if (checked)
+          await api(`/requirements/${requirementId}/materials`, "POST", {
+            knowledgeId,
+          });
+        else
+          await api(
+            `/requirements/${requirementId}/materials/${knowledgeId}`,
+            "DELETE",
+            {},
+          );
+      },
+      checked ? "已设为重点资料" : "已取消重点资料",
+    );
 
   const send = async (
     override?: string,
@@ -655,17 +671,28 @@ function Workspace(props: any) {
       });
     }, "原型已确认，正在生成 PRD");
 
+  const restoreVersion = (versionId: string, base: string) =>
+    run(async () => {
+      await api(`/requirements/${requirementId}/restore`, "POST", {
+        versionId,
+        base,
+      });
+    }, "已恢复为新的当前版本");
+
   const applyCandidate = () =>
     run(async () => {
       if (!candidateTask) return;
-      await api(`/requirements/${requirementId}/versions`, "POST", {
-        kind: "prototype",
-        content: candidateTask.candidate.content,
-        base: candidateTask.base,
-        metadata: candidateTask.candidate.metadata,
-      });
-      setDismissedCandidates((x) => [...x, candidateTask.id]);
+      await api(`/tasks/${candidateTask.id}/apply-candidate`, "POST", {});
     }, "候选修改已应用");
+  const discardCandidate = () =>
+    run(async () => {
+      if (!candidateTask) return;
+      await api(`/tasks/${candidateTask.id}/discard-candidate`, "POST", {});
+    }, "候选修改已放弃");
+  const retryTask = (taskId: string) =>
+    run(async () => {
+      await api(`/tasks/${taskId}/retry`, "POST", {});
+    }, "任务已重试");
 
   if (newDraft || !requirementId) {
     return (
@@ -682,7 +709,7 @@ function Workspace(props: any) {
           <Composer
             value={input}
             onChange={setInput}
-            onSend={() => send()}
+            onSend={() => run(() => send(), "")}
             disabled={false}
             model={model}
             effort={effort}
@@ -707,14 +734,36 @@ function Workspace(props: any) {
           </div>
         </div>
         <div className="top-actions">
+          <div className="artifact-nav" aria-label="成果阶段">
+            {[
+              ["requirement", "需求卡"],
+              ["prototype", "原型"],
+              ["prd", "PRD"],
+            ].map(([kind, label]) =>
+              req?.heads?.[kind] ? (
+                <button
+                  key={kind}
+                  className={
+                    stage === kind || (stage === "review" && kind === "prd")
+                      ? "active"
+                      : ""
+                  }
+                  onClick={() => {
+                    setActiveStage(kind as Stage);
+                    setArtifactOpen(true);
+                  }}
+                >
+                  {label}
+                </button>
+              ) : null,
+            )}
+          </div>
           <details className="sources-pop materials-pop">
             <summary>
               <BookOpen size={15} /> 重点资料 {linked.length}
             </summary>
             <div>
-              {projectKnowledge.length === 0 && (
-                <span>知识库暂无项目资料</span>
-              )}
+              {projectKnowledge.length === 0 && <span>知识库暂无项目资料</span>}
               {projectKnowledge.slice(0, 80).map((item: any) => (
                 <label className="material-check" key={item.id}>
                   <input
@@ -756,11 +805,12 @@ function Workspace(props: any) {
         </div>
       </header>
 
-      <div className={artifactOpen ? "workbench split" : "workbench"}>
+      <div className={showArtifact ? "workbench split" : "workbench"}>
         <div className="conversation-pane">
           <Conversation
             messages={workspace?.messages || []}
             tasks={workspace?.tasks || []}
+            onRetry={retryTask}
           />
           {selection && (
             <div className="selection-chip">
@@ -776,7 +826,7 @@ function Workspace(props: any) {
           <Composer
             value={input}
             onChange={setInput}
-            onSend={() => send()}
+            onSend={() => run(() => send(), "")}
             disabled={Boolean(running)}
             model={model}
             effort={effort}
@@ -786,16 +836,18 @@ function Workspace(props: any) {
           />
         </div>
 
-        {artifactOpen && (
+        {showArtifact && (
           <div className="artifact-pane">
             {stage === "requirement" && requirementVersion && (
               <RequirementArtifact
                 version={requirementVersion}
-                confirmed={
-                  req.confirmed?.requirement === requirementVersion.id
-                }
+                confirmed={req.confirmed?.requirement === requirementVersion.id}
                 onConfirm={confirmRequirement}
                 requirementId={requirementId}
+                versions={versions.filter((v: any) => v.kind === "requirement")}
+                onRestore={(versionId: string) =>
+                  restoreVersion(versionId, requirementVersion.id)
+                }
                 onRefresh={onRefresh}
                 run={run}
               />
@@ -808,11 +860,12 @@ function Workspace(props: any) {
                 selectionMode={selectionMode}
                 setSelectionMode={setSelectionMode}
                 candidateTask={candidateTask}
-                applyCandidate={applyCandidate}
-                discardCandidate={() =>
-                  candidateTask &&
-                  setDismissedCandidates((x) => [...x, candidateTask.id])
+                versions={versions.filter((v: any) => v.kind === "prototype")}
+                onRestore={(versionId: string) =>
+                  restoreVersion(versionId, prototypeVersion.id)
                 }
+                applyCandidate={applyCandidate}
+                discardCandidate={discardCandidate}
                 onConfirm={confirmPrototype}
               />
             )}
@@ -825,7 +878,11 @@ function Workspace(props: any) {
                 model={model}
                 effort={effort}
                 roles={reviewRoles}
-                onSend={send}
+                versions={versions.filter((v: any) => v.kind === "prd")}
+                onRestore={(versionId: string) =>
+                  restoreVersion(versionId, prdVersion.id)
+                }
+                onSend={(...args: any[]) => run(() => send(...args), "")}
                 onRefresh={onRefresh}
                 run={run}
               />
@@ -852,15 +909,15 @@ function StageChip({ stage }: { stage: Stage }) {
   );
 }
 
-function Conversation({ messages, tasks }: any) {
+function Conversation({ messages, tasks, onRetry }: any) {
   const end = useRef<HTMLDivElement>(null);
-  useEffect(
-    () => end.current?.scrollIntoView({ behavior: "smooth" }),
-    [messages.length, tasks?.at(-1)?.status],
-  );
+  useEffect(() => {
+    end.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length, tasks?.at(-1)?.status]);
   const active = tasks?.find((t: any) =>
     ["queued", "running"].includes(t.status),
   );
+  const failed = tasks?.at(-1)?.status === "failed" ? tasks.at(-1) : null;
   return (
     <div className="conversation">
       {messages.length === 0 && (
@@ -888,6 +945,14 @@ function Conversation({ messages, tasks }: any) {
           {active.events?.at(-1)?.text || "Codex 正在处理…"}
         </div>
       )}
+      {failed && (
+        <div className="task-failed">
+          <span>{failed.error || "任务执行失败，可以重试。"}</span>
+          <button className="ghost" onClick={() => onRetry(failed.id)}>
+            重试
+          </button>
+        </div>
+      )}
       <div ref={end} />
     </div>
   );
@@ -907,15 +972,12 @@ function Composer({
   return (
     <div className="composer">
       <textarea
+        aria-label="需求对话输入"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="输入需求、回答问题或继续修改…"
         onKeyDown={(e) => {
-          if (
-            e.key === "Enter" &&
-            !e.shiftKey &&
-            !e.nativeEvent.isComposing
-          ) {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             onSend();
           }
@@ -960,6 +1022,8 @@ function Composer({
 
 function RequirementArtifact({
   version,
+  versions,
+  onRestore,
   confirmed,
   onConfirm,
   requirementId,
@@ -967,7 +1031,9 @@ function RequirementArtifact({
   run,
 }: any) {
   const [content, setContent] = useState(version.content);
-  useEffect(() => setContent(version.content), [version.id]);
+  useEffect(() => {
+    setContent(version.content);
+  }, [version.id]);
   const dirty = content !== version.content;
   const save = () =>
     run(async () => {
@@ -990,6 +1056,12 @@ function RequirementArtifact({
               保存修改
             </button>
           )}
+          <VersionHistory
+            label="需求卡"
+            current={version}
+            versions={versions}
+            onRestore={onRestore}
+          />
           {!confirmed && (
             <button className="primary" onClick={onConfirm}>
               <Check size={15} /> 确认需求
@@ -999,6 +1071,7 @@ function RequirementArtifact({
       }
     >
       <textarea
+        aria-label="需求卡编辑器"
         className="doc-editor"
         value={content}
         onChange={(e) => setContent(e.target.value)}
@@ -1009,6 +1082,8 @@ function RequirementArtifact({
 
 function PrototypeArtifact({
   version,
+  versions,
+  onRestore,
   confirmed,
   iframeRef,
   selectionMode,
@@ -1031,6 +1106,12 @@ function PrototypeArtifact({
           >
             <SquareMousePointer size={15} /> 点选修改
           </button>
+          <VersionHistory
+            label="原型"
+            current={version}
+            versions={versions}
+            onRestore={onRestore}
+          />
           <button
             className="ghost"
             onClick={() =>
@@ -1090,33 +1171,31 @@ function PrdArtifact({
   model,
   effort,
   roles,
+  versions,
+  onRestore,
   onSend,
   onRefresh,
   run,
 }: any) {
   const [content, setContent] = useState(prdVersion.content);
   const [tab, setTab] = useState<"prd" | "review" | "showme">("prd");
-  const briefKey = `prd-showme:${requirementId}`;
-  const legacyBrief = safeJson<any>(localStorage.getItem(briefKey), null);
-  const initialBriefs: ReviewBrief[] = Array.isArray(legacyBrief)
-    ? legacyBrief
-    : legacyBrief?.html
-      ? [{ ...legacyBrief, id: legacyBrief.id || crypto.randomUUID(), number: 1 }]
-      : [];
-  const [briefs, setBriefs] = useState<ReviewBrief[]>(initialBriefs);
   const [briefId, setBriefId] = useState("");
-  useEffect(() => setContent(prdVersion.content), [prdVersion.id]);
+  useEffect(() => {
+    setContent(prdVersion.content);
+  }, [prdVersion.id]);
   const req = workspace.requirement;
+  const upstreamReady =
+    req.mode !== "full" ||
+    (req.heads.prototype && req.confirmed.prototype === req.heads.prototype) ||
+    req.waiver?.requirementVersion === req.heads.requirement;
   const dirty = content !== prdVersion.content;
   const resolutions = workspace.resolutions || [];
+  const briefs: ReviewBrief[] = workspace.reviewBriefs || [];
   const currentBriefs = briefs.filter((x) => x.prdVersionId === prdVersion.id);
+  const outdatedBriefs = briefs.filter((x) => x.prdVersionId !== prdVersion.id);
   const currentBrief =
     currentBriefs.find((x) => x.id === briefId) || currentBriefs.at(-1);
 
-  const saveBriefs = (next: ReviewBrief[]) => {
-    setBriefs(next);
-    localStorage.setItem(briefKey, JSON.stringify(next));
-  };
   const savePrd = () =>
     run(async () => {
       await api(`/requirements/${requirementId}/versions`, "POST", {
@@ -1151,14 +1230,15 @@ function PrdArtifact({
     }, "评审决策已记录");
   const applyAccepted = async () => {
     const accepted =
-      reviewVersion?.metadata?.issues?.filter((issue: any) =>
-        resolutions.some(
-          (r: any) =>
-            r.reviewId === reviewVersion.id &&
-            r.issueId === issue.id &&
-            r.decision === "采纳",
-        ),
-      ) || [];
+      reviewVersion?.metadata?.issues?.filter((issue: any) => {
+        const latest = resolutions
+          .filter(
+            (r: any) =>
+              r.reviewId === reviewVersion.id && r.issueId === issue.id,
+          )
+          .at(-1);
+        return latest?.decision === "采纳";
+      }) || [];
     if (!accepted.length) return;
     await onSend(
       `根据以下已经由用户明确采纳的评审建议统一修改当前 PRD。不要擅自采纳其他问题。\n${accepted
@@ -1173,11 +1253,43 @@ function PrdArtifact({
     setTab("prd");
   };
   const finalize = () =>
+    run(
+      async () => {
+        await api(`/requirements/${requirementId}/finalize`, "POST", {
+          versionId: prdVersion.id,
+        });
+      },
+      reviewVersion ? "终稿已确认" : "已跳过 AI 评审并确认终稿",
+    );
+  const syncPrd = () =>
     run(async () => {
-      await api(`/requirements/${requirementId}/finalize`, "POST", {
+      await api(`/requirements/${requirementId}/sync-prd`, "POST", {
         versionId: prdVersion.id,
       });
-    }, reviewVersion ? "终稿已确认" : "已跳过 AI 评审并确认终稿");
+    }, "PRD 已与当前需求和原型重新同步");
+  const publishFeishu = async () => {
+    const target = window.prompt(
+      "飞书目标（my_library 或知识库节点 token）",
+      "my_library",
+    );
+    if (!target?.trim()) return;
+    await run(async () => {
+      const approval = await api("/publish/prepare", "POST", {
+        requirementId,
+        versionId: prdVersion.id,
+        target: target.trim(),
+        attachmentIds: [],
+        includePrototype: false,
+      });
+      if (!window.confirm("确认将当前 PRD 终稿发布到飞书？")) return;
+      await api("/publish/confirm", "POST", { approvalId: approval.id });
+    }, "PRD 已发布到飞书");
+  };
+  const published = (workspace.publications || []).some(
+    (publication: any) =>
+      publication.versionId === prdVersion.id &&
+      publication.status === "published",
+  );
 
   const generateShowme = async () => {
     const before = workspace.messages.length;
@@ -1199,22 +1311,18 @@ function PrdArtifact({
           .slice(before)
           .reverse()
           .find(
-            (m: any) =>
-              m.role === "assistant" && /<html[\s>]/i.test(m.content),
+            (m: any) => m.role === "assistant" && /<html[\s>]/i.test(m.content),
           );
         if (latest) {
           const match =
             latest.content.match(/<!doctype html>[\s\S]*<\/html>/i) ||
             latest.content.match(/<html[\s\S]*<\/html>/i);
           if (match) {
-            const item: ReviewBrief = {
-              id: crypto.randomUUID(),
-              number: currentBriefs.length + 1,
-              prdVersionId: prdVersion.id,
-              html: match[0],
-              createdAt: new Date().toISOString(),
-            };
-            saveBriefs([...briefs, item]);
+            const item = await api(
+              `/requirements/${requirementId}/review-briefs`,
+              "POST",
+              { prdVersionId: prdVersion.id, html: match[0] },
+            );
             setBriefId(item.id);
             setTab("showme");
             return;
@@ -1249,10 +1357,32 @@ function PrdArtifact({
           >
             <Download size={15} /> Markdown
           </button>
-          {!req.finalVersion && (
+          <VersionHistory
+            label="PRD"
+            current={prdVersion}
+            versions={versions}
+            onRestore={onRestore}
+          />
+          {req.finalVersion !== prdVersion.id && !req.stale && (
             <button className="primary" onClick={finalize}>
               <Check size={15} />
               {reviewVersion ? "确认终稿" : "跳过评审并确认终稿"}
+            </button>
+          )}
+          {req.stale && (
+            <button
+              className="ghost"
+              onClick={syncPrd}
+              disabled={!upstreamReady}
+              title={upstreamReady ? "" : "请先返回原型并确认当前正式原型"}
+            >
+              <RefreshCcw size={15} /> 重新同步
+            </button>
+          )}
+          {req.finalVersion === prdVersion.id && !req.stale && (
+            <button className="ghost" onClick={publishFeishu}>
+              <ExternalLink size={15} />
+              {published ? "飞书已交付" : "飞书交付"}
             </button>
           )}
         </>
@@ -1270,7 +1400,9 @@ function PrdArtifact({
           onClick={() => setTab("review")}
         >
           AI 评审
-          {reviewVersion ? ` · ${reviewVersion.metadata?.issues?.length || 0}` : ""}
+          {reviewVersion
+            ? ` · ${reviewVersion.metadata?.issues?.length || 0}`
+            : ""}
         </button>
         <button
           className={tab === "showme" ? "active" : ""}
@@ -1282,6 +1414,7 @@ function PrdArtifact({
       {tab === "prd" && (
         <div className="prd-edit-wrap">
           <textarea
+            aria-label="PRD 文档编辑器"
             className="doc-editor prd-editor"
             value={content}
             onChange={(e) => setContent(e.target.value)}
@@ -1301,9 +1434,7 @@ function PrdArtifact({
             <div className="empty-state">
               <Bot size={24} />
               <h3>多 Agent 评审是可选的</h3>
-              <p>
-                默认从多个独立视角检查当前 PRD。角色可以在设置中全局修改。
-              </p>
+              <p>默认从多个独立视角检查当前 PRD。角色可以在设置中全局修改。</p>
               <button className="primary" onClick={startReview}>
                 <Sparkles size={15} /> 开始评审
               </button>
@@ -1318,8 +1449,7 @@ function PrdArtifact({
                 const resolution = resolutions
                   .filter(
                     (r: any) =>
-                      r.reviewId === reviewVersion.id &&
-                      r.issueId === issue.id,
+                      r.reviewId === reviewVersion.id && r.issueId === issue.id,
                   )
                   .at(-1);
                 return (
@@ -1347,10 +1477,7 @@ function PrdArtifact({
                   </div>
                 );
               })}
-              <button
-                className="primary apply-review"
-                onClick={applyAccepted}
-              >
+              <button className="primary apply-review" onClick={applyAccepted}>
                 应用已采纳建议
               </button>
             </>
@@ -1359,12 +1486,19 @@ function PrdArtifact({
       )}
       {tab === "showme" && (
         <div className="showme-panel">
+          {outdatedBriefs.length > 0 && currentBriefs.length === 0 && (
+            <div className="stale-brief-note">
+              现有 {outdatedBriefs.length} 个讲解版本基于旧 PRD，请为当前 PRD
+              重新生成。
+            </div>
+          )}
           {!currentBrief ? (
             <div className="empty-state">
               <Monitor size={24} />
               <h3>生成需求评审讲解</h3>
               <p>
-                基于当前 PRD 生成一份更适合产品评审会议演示的 HTML，不影响 PRD 本身。
+                基于当前 PRD 生成一份更适合产品评审会议演示的 HTML，不影响 PRD
+                本身。
               </p>
               <button className="primary" onClick={generateShowme}>
                 <WandSparkles size={15} /> 生成评审讲解
@@ -1402,7 +1536,7 @@ function PrdArtifact({
               </div>
               <iframe
                 className="showme-frame"
-                srcDoc={currentBrief.html}
+                srcDoc={isolatedPreview(currentBrief.html)}
                 sandbox="allow-scripts"
               />
             </>
@@ -1424,6 +1558,40 @@ function ArtifactShell({ title, subtitle, actions, children }: any) {
         <div className="artifact-actions">{actions}</div>
       </header>
       <div className="artifact-body">{children}</div>
+    </div>
+  );
+}
+
+function VersionHistory({ label, current, versions, onRestore }: any) {
+  const [selected, setSelected] = useState("");
+  const historical = [...(versions || [])]
+    .filter((version: any) => version.id !== current.id)
+    .reverse();
+  if (!historical.length) return null;
+  return (
+    <div className="version-history">
+      <select
+        aria-label={`${label}历史版本`}
+        value={selected}
+        onChange={(event) => setSelected(event.target.value)}
+      >
+        <option value="">历史版本</option>
+        {historical.map((version: any) => (
+          <option key={version.id} value={version.id}>
+            v{version.number} · {version.actor}
+          </option>
+        ))}
+      </select>
+      <button
+        className="ghost"
+        disabled={!selected}
+        onClick={() => {
+          onRestore(selected);
+          setSelected("");
+        }}
+      >
+        回退
+      </button>
     </div>
   );
 }
@@ -1527,7 +1695,8 @@ function KnowledgeView({
       location: location.trim(),
       name:
         type === "directory"
-          ? location.trim().split(/[\\/]/).filter(Boolean).at(-1) || "本地文件夹"
+          ? location.trim().split(/[\\/]/).filter(Boolean).at(-1) ||
+            "本地文件夹"
           : "飞书文档",
     };
     const list = [...sources, next];
@@ -1547,10 +1716,7 @@ function KnowledgeView({
     const map = new Map<string, any>();
     for (const item of knowledge.items || []) {
       const key = `${item.requirementId || "project"}:${item.source}:${item.name}`;
-      if (
-        !map.has(key) ||
-        (map.get(key).version || 0) < (item.version || 0)
-      )
+      if (!map.has(key) || (map.get(key).version || 0) < (item.version || 0))
         map.set(key, item);
     }
     return [...map.values()].sort((a, b) =>
@@ -1694,13 +1860,11 @@ function SettingsView({
     data.settings?.defaults?.reviewRoles || DEFAULT_ROLES,
   );
   const effectiveModel = model || data.settings.model || "gpt-5.6-terra";
-  const effectiveEffort =
-    effort || data.settings.reasoningEffort || "medium";
+  const effectiveEffort = effort || data.settings.reasoningEffort || "medium";
 
-  useEffect(
-    () => setTemplateText(template?.release?.content || ""),
-    [template?.release?.id],
-  );
+  useEffect(() => {
+    setTemplateText(template?.release?.content || "");
+  }, [template?.release?.id]);
   useEffect(() => {
     setRoles(data.settings?.defaults?.reviewRoles || DEFAULT_ROLES);
   }, [JSON.stringify(data.settings?.defaults?.reviewRoles || [])]);
@@ -1835,6 +1999,7 @@ function SettingsView({
             </button>
           </div>
           <textarea
+            aria-label="全局 PRD 模板"
             className="template-editor"
             value={templateText}
             onChange={(e) => setTemplateText(e.target.value)}
@@ -1879,9 +2044,7 @@ function SettingsView({
                 />
                 <button
                   className="icon-button"
-                  onClick={() =>
-                    setRoles(roles.filter((_, i) => i !== index))
-                  }
+                  onClick={() => setRoles(roles.filter((_, i) => i !== index))}
                 >
                   <Trash2 size={14} />
                 </button>

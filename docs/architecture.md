@@ -76,6 +76,8 @@ task.candidate
   └─ 放弃 → 正式 head 不变化
 ```
 
+应用与放弃都通过任务级受控接口落库并记录审计；前端不能绕过候选任务直接把 AI 内容保存为正式版本。
+
 旧 `/tasks` 直接任务 API 仍保留历史 Skill / Style / Template 选择，仅用于数据迁移、历史自动化和测试兼容；新版 Web 不调用这些入口。
 
 ### `server/agent.ts`
@@ -195,6 +197,8 @@ AI 评审不是终稿硬门禁。未启动评审时可以确认终稿，并记�
 
 原型使用 `srcDoc` 沙箱预览，并在预览副本中注入 inspector：用户点击 DOM 后将 selector、outerHTML、文本和 rect 通过 `postMessage` 返回宿主。正式保存的 HTML 不写入 inspector 脚本。
 
+需求卡、原型和 PRD 的历史回退会以所选历史版本为内容创建新版本，不移动或覆盖历史 head。工作区可以在已经生成的三类成果间切换，以便从终稿阶段回到上游继续修改；上游正式版本变化后下游进入 stale 状态。评审讲解版本由 SQLite 保存，并显式关联生成时的 PRD version；当前 PRD 变化后旧讲解只保留作追溯。
+
 ## 3. 前端阶段状态
 
 ### 需求阶段
@@ -278,6 +282,7 @@ HTTP：
 - no network
 - no form submit
 - no iframe/object/embed/base
+- `srcDoc` 预览副本注入 CSP，只允许内联脚本/样式及 data/blob 图片
 
 Codex：
 

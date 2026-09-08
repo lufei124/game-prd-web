@@ -31,7 +31,7 @@ test("subscription login lifecycle and isolated token refresh (fake CLI, no onli
   const binary = join(root, "fake-codex");
   await writeFile(
     binary,
-    '#!/bin/sh\nif [ "$4" = "status" ]; then test -f "$CODEX_HOME/auth.json" || exit 1; printf "Logged in using ChatGPT"; exit 0; fi\nprintf "https://auth.openai.com/codex/device\\nABCD-EFGH\\n"\n/bin/sleep 1\nprintf \'{"fake":"initial"}\' > "$CODEX_HOME/auth.json"\n',
+    '#!/bin/sh\nif [ "$4" = "status" ]; then test -f "$CODEX_HOME/auth.json" || exit 1; printf "Logged in using ChatGPT"; exit 0; fi\nprintf "https://auth.openai.com/codex/device\\nABCD-EFGH\\n"\n/bin/sleep 2\nprintf \'{"fake":"initial"}\' > "$CODEX_HOME/auth.json"\n',
     { mode: 0o700 },
   );
   process.env.WORKBENCH_CODEX_BINARY = binary;

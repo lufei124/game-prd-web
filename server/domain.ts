@@ -50,6 +50,7 @@ export const reviewSchema = z.object({
       severity: z.enum(["critical", "major", "minor"]),
       description: z.string(),
       suggestion: z.string(),
+      sourceRole: z.string().min(1).optional(),
     }),
   ),
   summary: z.string(),
@@ -189,9 +190,7 @@ export class Domain {
   }
 
   versions(id: string) {
-    return this.s
-      .all<Version>("version")
-      .filter((v) => v.requirementId === id);
+    return this.s.all<Version>("version").filter((v) => v.requirementId === id);
   }
 
   conversationStage(r: Requirement) {
@@ -233,10 +232,7 @@ export class Domain {
       return;
     }
     if (r.mode === "review" || r.mode === "publish") {
-      check(
-        kind === "prd" || kind === "review",
-        "独立评审/发布任务只接受 PRD",
-      );
+      check(kind === "prd" || kind === "review", "独立评审/发布任务只接受 PRD");
       return;
     }
     if (kind === "prototype" && r.mode === "full")
@@ -305,6 +301,10 @@ export class Domain {
         check(
           !/<(?:iframe|object|embed|base)\b/i.test(content),
           "原型不允许嵌套框架或外部对象",
+        );
+        check(
+          !/(?:src|href|action)\s*=\s*["']\s*(?:https?:)?\/\//i.test(content),
+          "原型不允许外部网络资源",
         );
       }
       if (kind === "review") {
@@ -414,7 +414,10 @@ export class Domain {
 
   private prdLineage(versionId: string) {
     const ids = new Set<string>();
-    let current: Version | undefined = this.s.get<Version>("version", versionId);
+    let current: Version | undefined = this.s.get<Version>(
+      "version",
+      versionId,
+    );
     while (current && current.kind === "prd" && !ids.has(current.id)) {
       ids.add(current.id);
       if (!current.parentId) break;
@@ -431,11 +434,7 @@ export class Domain {
   finalize(id: string, versionId: string, actor = "user") {
     check(actor === "user", "Agent 无权确认终稿", 403);
     const r = this.s.get<Requirement>("requirement", id);
-    check(
-      r.heads.prd === versionId && !r.stale,
-      "PRD 版本已变化或待同步",
-      409,
-    );
+    check(r.heads.prd === versionId && !r.stale, "PRD 版本已变化或待同步", 409);
     this.gate(r, "prd");
 
     const lineage = this.prdLineage(versionId);
@@ -536,10 +535,8 @@ export function completeness(content: string) {
       description,
       suggestion: "补充具体规则与可观察的验收依据，或记录用户裁决。",
     });
-  if (!/R-\d{3}/.test(content))
-    add("CHECK-RULES", "未发现稳定的业务规则编号");
-  if (!/AC-\d{3}/.test(content))
-    add("CHECK-AC", "未发现可追溯的验收标准编号");
+  if (!/R-\d{3}/.test(content)) add("CHECK-RULES", "未发现稳定的业务规则编号");
+  if (!/AC-\d{3}/.test(content)) add("CHECK-AC", "未发现可追溯的验收标准编号");
   if (!/异常|失败|错误|边界|exception|failure|boundary/i.test(content))
     add("CHECK-BOUNDARY", "未识别异常或边界处理内容");
   if (/待确认|待补充|\bTODO\b|\bTBD\b/i.test(content))

@@ -5,8 +5,7 @@ import { KnowledgeTree } from "./knowledge-tree.ts";
 
 function queryTerms(query: string) {
   const lower = query.toLowerCase();
-  const words =
-    lower.match(/[a-z0-9][a-z0-9._-]+|[\u4e00-\u9fff]{2,8}/g) || [];
+  const words = lower.match(/[a-z0-9][a-z0-9._-]+|[\u4e00-\u9fff]{2,8}/g) || [];
   const han = lower.match(/[\u4e00-\u9fff]+/g) || [];
   const bigrams = han.flatMap((run) =>
     run.length < 2
@@ -23,32 +22,37 @@ function chunks(text: string, max = 1100, overlap = 160) {
   const result: { index: number; text: string; heading: string }[] = [];
   let carry = "";
   let heading = "";
-  const push = (body: string) => {
+  let carryHeading = "";
+  const push = (body: string, chunkHeading: string) => {
     const value = body.trim();
     if (!value) return;
-    result.push({ index: result.length, text: value, heading });
+    result.push({ index: result.length, text: value, heading: chunkHeading });
   };
   for (const block of blocks) {
     const h = block.match(/^#{1,6}\s+(.+)$/m);
     if (h) heading = h[1].trim();
+    const blockHeading = heading;
     const next = carry ? carry + "\n\n" + block : block;
     if (next.length <= max) {
+      if (!carry) carryHeading = blockHeading;
       carry = next;
       continue;
     }
-    if (carry) push(carry);
+    if (carry) push(carry, carryHeading);
     if (block.length <= max) {
       carry = block;
+      carryHeading = blockHeading;
       continue;
     }
     let start = 0;
     while (start < block.length) {
-      push(block.slice(start, start + max));
+      push(block.slice(start, start + max), blockHeading);
       start += Math.max(1, max - overlap);
     }
     carry = "";
+    carryHeading = "";
   }
-  if (carry) push(carry);
+  if (carry) push(carry, carryHeading);
   return result;
 }
 
@@ -118,8 +122,7 @@ export class Knowledge {
       error = "";
     const ext = extname(name).toLowerCase();
     try {
-      if ([".md", ".txt", ".csv"].includes(ext))
-        text = bytes.toString("utf8");
+      if ([".md", ".txt", ".csv"].includes(ext)) text = bytes.toString("utf8");
       else if (ext === ".docx") {
         const mammoth = await import("mammoth");
         text = (await mammoth.extractRawText({ buffer: bytes })).value;
@@ -137,8 +140,7 @@ export class Knowledge {
         }
       } else if ([".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(ext)) {
         status = "image";
-        error =
-          "保留图片原文件；文本索引未理解图像。可作为显式视觉参考读取。";
+        error = "保留图片原文件；文本索引未理解图像。可作为显式视觉参考读取。";
       } else {
         status = "unparsed";
         error = "暂不支持此格式的文本解析";
@@ -217,7 +219,8 @@ export class Knowledge {
         const score =
           matchedChunks.reduce((sum, x, i) => sum + x.score / (i + 1), 0) +
           (matchedChunks.length ? 2 : 0);
-        return { ...item, score, matchedChunks };
+        const { text: _fullText, ...document } = item;
+        return { ...document, score, matchedChunks };
       })
       .filter((x) => !terms.length || x.score > 0)
       .sort((a, b) => b.score - a.score)
