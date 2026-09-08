@@ -196,6 +196,49 @@ test("local and Feishu sources keep stable document identity and trace versions"
       f.store.get<any>("knowledge", first.id).versionStatus,
       "superseded",
     );
+    assert.equal(
+      f.knowledge.sources.reconcileDirectory(local.id, []).deprecated,
+      1,
+    );
+    assert.equal(
+      f.store.get<any>("knowledgeDocument", changed.documentId).status,
+      "deprecated",
+    );
+    const skipped = new ContextOrchestrator(f.store, f.knowledge).buildContext({
+      taskId: "missing-local",
+      projectId: f.project.id,
+      requirementId: "missing-req",
+      requirementName: "商店",
+      prompt: "一次最多购买几个",
+      stage: "requirement",
+    });
+    assert.ok(
+      skipped.contextPack.items.every(
+        (item) => item.documentId !== changed.documentId,
+      ),
+    );
+    const reappeared = await f.knowledge.import(
+      f.project.id,
+      null,
+      "nested/rule.md",
+      Buffer.from("# 商店\n一次最多购买二十个"),
+      "directory:/tmp/design/nested/rule.md",
+      "shop",
+      "pending",
+      null,
+      {
+        sourceId: local.id,
+        sourceType: "directory",
+        locator: local.locator,
+        externalId: "nested/rule.md",
+      },
+    );
+    assert.equal(reappeared.id, changed.id);
+    assert.equal(reappeared.reactivated, true);
+    assert.equal(
+      f.store.get<any>("knowledgeDocument", changed.documentId).status,
+      "active",
+    );
 
     const feishu = f.knowledge.sources.ensure(f.project.id, {
       type: "feishu",

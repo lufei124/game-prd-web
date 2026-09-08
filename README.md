@@ -40,6 +40,8 @@ npm run dev
 
 检索在导入时持久化 heading-aware Chunk，并用英文/数字词与中文词/双字片段写入 SQLite FTS5；运行时先取候选 Chunk，再按标题、heading、完整短语、重点资料和文档多样性排序。同一资料源重复同步且内容未变化时不会创建重复版本。
 
+Local Source 每次同步还会按 relative path 对账：源目录中消失的文档只标记为 deprecated，不删除历史版本、Chunk 或旧任务 ContextPack；文件重新出现时恢复 active。
+
 需求也可以固定「重点资料」。重点资料保证被 Context Builder 考虑，但长文只读取相关片段，不会整篇强塞。每个新对话任务冻结独立 ContextPack；资料源后续同步不会改变旧任务上下文。
 
 ### 3. 需求澄清

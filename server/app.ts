@@ -614,11 +614,15 @@ export async function createApp(
     check(!source.removedAt, "资料源已解除", 409);
     check(source.type !== "upload", "项目上传资料无需同步", 409);
     const results: any[] = [];
+    let reconciled = 0;
     try {
       if (source.type === "directory") {
         const files = await directoryFiles(
           source.locator,
           s.get("settings", "system").authorizedRoots,
+        );
+        const observed = Object.keys(files).map((path) =>
+          path.replaceAll("\\", "/"),
         );
         for (const [relativePath, data] of Object.entries(files)) {
           let folderId: string | null = null;
@@ -656,6 +660,10 @@ export async function createApp(
             ),
           );
         }
+        reconciled = knowledge.sources.reconcileDirectory(
+          source.id,
+          observed,
+        ).deprecated;
       } else {
         const remote = await registry.get("feishu").fetch(source.locator);
         results.push(
@@ -685,7 +693,8 @@ export async function createApp(
         source.id,
         "success",
         "",
-        results.filter((x) => !x.unchanged).length,
+        results.filter((x) => !x.unchanged || x.reactivated).length +
+          reconciled,
       );
       return results;
     } catch (error) {

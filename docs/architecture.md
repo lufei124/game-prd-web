@@ -275,6 +275,8 @@ Canonical state 是 `knowledgeSource` entity，支持：
 
 Source 下是稳定 `knowledgeDocument`；既有 `knowledge` 记录作为不可变 DocumentVersion。Local 用 source 内 normalized relative path 识别文档、SHA256 判断内容变化；飞书用 document token 识别，保存 revision、URL、远端更新时间（若 API 返回）和同步时间。相同 hash 只刷新同步元数据，不制造重复文本版本。
 
+Local Source 同步结束后使用本次扫描到的 relative path 集合对账。缺失文档标记为 `deprecated / source_missing`，不删除 DocumentVersion、Chunk、Pinned link 或历史 ContextPack；相同文件重新出现时恢复 `active`，且相同 hash 不创建新版本。
+
 本地目录首次关联时会把精确路径加入 `authorizedRoots`，目录读取仍需经过 `directoryFiles()` 的 realpath、symlink、文件数和总体积校验。
 
 解除资料源只停止后续同步，不自动删除已经进入知识库的历史资料。

@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { html, metadata, prd } from "./fixtures.ts";
-import { writeFile } from "node:fs/promises";
+import { unlink, writeFile } from "node:fs/promises";
 
 const post = async (page: any, path: string, body: any) =>
   page.evaluate(
@@ -155,6 +155,49 @@ test("knowledge sources sync and chunk search returns relevant text", async ({
     after.tasks.at(-1).snapshot.contextPack.items[0].knowledgeId;
   expect(newKnowledgeId).not.toBe(oldKnowledgeId);
   expect(after.tasks[0].snapshot.contextPack.items[0].knowledgeId).toBe(
+    oldKnowledgeId,
+  );
+
+  await unlink("/private/tmp/game-prd-web-e2e-knowledge/会员退款规则.md");
+  await page
+    .locator(".source-card")
+    .filter({ hasText: "game-prd-web-e2e-knowledge" })
+    .getByTitle("立即同步")
+    .click();
+  await expect(
+    page
+      .locator(".source-card")
+      .filter({ hasText: "game-prd-web-e2e-knowledge" }),
+  ).toContainText("1 项变化");
+  const reconciled = await get(
+    page,
+    `/knowledge?projectId=${encodeURIComponent(projectId)}`,
+  );
+  expect(
+    reconciled.documents.find(
+      (document: any) => document.currentVersionId === newKnowledgeId,
+    ).status,
+  ).toBe("deprecated");
+  await post(page, `/requirements/${requirement.id}/chat`, {
+    prompt: "会员退款超过十四天怎么处理？",
+    stage: "requirement",
+  });
+  await expect
+    .poll(
+      async () =>
+        (await get(page, `/requirements/${requirement.id}`)).tasks.at(-1)
+          ?.status,
+    )
+    .toBe("completed");
+  const afterDeletion = await get(page, `/requirements/${requirement.id}`);
+  expect(
+    afterDeletion.tasks
+      .at(-1)
+      .snapshot.contextPack.items.every(
+        (item: any) => item.knowledgeId !== newKnowledgeId,
+      ),
+  ).toBe(true);
+  expect(afterDeletion.tasks[0].snapshot.contextPack.items[0].knowledgeId).toBe(
     oldKnowledgeId,
   );
 });

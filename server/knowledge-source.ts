@@ -224,4 +224,35 @@ export class KnowledgeSources {
       updatedAt: now(),
     });
   }
+
+  reconcileDirectory(sourceId: string, observedExternalIds: Iterable<string>) {
+    const source = this.s.get("knowledgeSource", sourceId);
+    if (source.type !== "directory") return { deprecated: 0 };
+    const observed = new Set(
+      [...observedExternalIds].map((value) =>
+        String(value).replaceAll("\\", "/"),
+      ),
+    );
+    let deprecated = 0;
+    this.s.tx(() => {
+      for (const document of this.s
+        .all("knowledgeDocument")
+        .filter(
+          (item) =>
+            item.sourceId === sourceId &&
+            item.status === "active" &&
+            !observed.has(String(item.externalId).replaceAll("\\", "/")),
+        )) {
+        this.s.put("knowledgeDocument", {
+          ...document,
+          status: "deprecated",
+          deprecatedAt: now(),
+          deprecationReason: "source_missing",
+          updatedAt: now(),
+        });
+        deprecated++;
+      }
+    });
+    return { deprecated };
+  }
 }

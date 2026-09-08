@@ -86,6 +86,8 @@ export class Knowledge {
     // snapshots keep referencing the previous immutable record.
     if (latest && !latest.deletedAt && latest.hash === contentHash) {
       const syncedAt = metadata.syncedAt || now();
+      const document = this.s.maybe("knowledgeDocument", documentId);
+      const reactivated = document?.status === "deprecated";
       const refreshed = {
         ...latest,
         sourceRevision: metadata.sourceRevision ?? latest.sourceRevision,
@@ -94,14 +96,16 @@ export class Knowledge {
         syncedAt,
       };
       this.s.put("knowledge", refreshed);
-      const document = this.s.maybe("knowledgeDocument", documentId);
       if (document)
         this.s.put("knowledgeDocument", {
           ...document,
           sourceUrl: refreshed.sourceUrl,
+          status: "active",
+          deprecatedAt: undefined,
+          deprecationReason: undefined,
           updatedAt: syncedAt,
         });
-      return { ...refreshed, unchanged: true };
+      return { ...refreshed, unchanged: true, reactivated };
     }
 
     const id = uid();

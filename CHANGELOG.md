@@ -6,6 +6,7 @@
 - 新 conversation task 冻结 `snapshot.contextPack`；Codex 不再接收 raw search results，历史 `snapshot.knowledge` 保持兼容。
 - Knowledge Source 改为 canonical entity，幂等兼容迁移旧 `project.defaults.knowledgeSources`；Local hash/version 链和飞书 revision/URL 可追踪。
 - 知识页显示 Source/DocumentVersion 元数据与任务引用来源；保留 Codex native Skills 和既有确认、候选、发布、安全门禁。
+- Local Source 同步增加删除对账：缺失文件对应 Document 保守标记 deprecated，重新出现时恢复 active，历史版本与冻结任务保持不变。
 
 ## 2026-09-08 · Conversation-first 工作台审查修复
 
