@@ -1,3 +1,4 @@
+import { ResizeHandle } from "./ResizeHandle";
 import React, { useRef, useState } from "react";
 import { api } from "../api";
 
@@ -173,6 +174,7 @@ export function DocumentEditor({
   references,
   previous,
   initialMode = "read",
+  recoveryPending = false,
 }: any) {
   const [mode, setMode] = useState(initialMode);
   const editor = useRef<HTMLTextAreaElement>(null);
@@ -241,6 +243,22 @@ export function DocumentEditor({
         )}
       </div>
       <div className={`document-layout ${mode}`}>
+        <ResizeHandle
+          name="大纲与正文分栏"
+          target=".document-outline"
+          variable="--outline-width"
+          min={100}
+          reserve={280}
+        />
+        {mode === "split" && (
+          <ResizeHandle
+            name="编辑与预览分栏"
+            target=".doc-editor"
+            variable="--editor-width"
+            min={150}
+            reserve={350}
+          />
+        )}
         <nav className="document-outline" aria-label="文档大纲">
           <small>文档大纲</small>
           {headings.map((h) => (
@@ -260,6 +278,7 @@ export function DocumentEditor({
             ref={editor}
             aria-label={label}
             className="doc-editor"
+            readOnly={recoveryPending}
             value={content}
             onChange={(e) => onChange(e.target.value)}
             spellCheck={false}

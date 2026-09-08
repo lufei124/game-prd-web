@@ -251,7 +251,9 @@ PRD 支持人工编辑和 AI 修改。
 - 全局 PRD 模板
 - 全局多 Agent 评审角色
 
-需求聊天框也允许本次任务临时改变模型和思考深度。
+需求聊天框也允许本次任务临时改变模型和思考深度。模型和思考深度都从工作台内置列表选择，不提供手写 ID 或系统下拉框。
+
+ChatGPT 订阅登录在主界面右上角完成；设置页只保存默认模型和思考深度，不再承载登录入口。
 
 ### 不开放的配置
 
@@ -374,3 +376,11 @@ Inspect 的 postMessage 只接收当前原型 iframe，Escape 可以从 iframe �
 `DELETE /api/requirements/:id` 校验名称、实际运行任务与发布锁；Domain 同时拒绝 Agent、queued/running/waiting 任务及 writing 发布。`POST /api/requirements/:id/restore-deleted` 要求父项目存在，逐项检查 ID 冲突，事务恢复且不覆盖现有实体。bootstrap 仅暴露回收站摘要，不返回内部快照。
 
 项目删除包含 requirementTrash；恢复项目不自动恢复此前单独删除的需求。既有项目永久清理递归纳入这些需求的附件、任务目录和交付文件，避免漏清理。前端删除入口只移入回收站，不发起永久清理。
+
+## 本地 Draft Recovery
+
+`useArtifactDraft` 的 localStorage key 为 `forge:artifact-draft:v1:{requirementId}:{artifactKind}:{baseVersionId}`，保存文本、原始文本和基础版本编号。700ms debounce 加页面隐藏/卸载补写，仅供浏览器恢复；服务器仍是业务状态源。新会话明确恢复，同版本可继续编辑，异版本只读查看；保存后移除对应备份。存储容量或权限失败会显示提示。CI 复用已有 executablePath 配置运行 Mock smoke，不要求下载 Playwright Chromium。
+
+### 可拖动左右分栏
+
+桌面端导航、对话与成果、文档大纲与正文、编辑与预览、知识来源与文档，以及知识文档侧栏支持拖动调宽。悬停分隔线显示反馈，双击恢复默认，方向键以 10px 调整（Shift 为 40px）。宽度按布局类型保存在当前浏览器；设置最小宽度与可用空间约束，窄屏使用原响应式布局。布局偏好不改变业务数据。

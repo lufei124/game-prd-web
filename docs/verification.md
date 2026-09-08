@@ -1,5 +1,13 @@
 # 独立项目验证记录
 
+## 2026-09-08 · 模型列表与右上角登录
+
+- `npm test`：58 passed，0 failed。模型调用仍是 SDK/Runtime Mock。
+- `npm run build`：TypeScript 与 Vite 通过；1590 modules，JS 272.47 kB（gzip 86.94 kB），CSS 43.42 kB（gzip 9.23 kB）。
+- `PLAYWRIGHT_CHROMIUM_EXECUTABLE='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' npm run test:e2e`：14 passed（20.0s）。覆盖输入框与设置页的自定义模型/思考深度列表、设置持久化，以及设置卡内不再出现登录按钮。
+- 真实 Chrome 截图确认：输入框为胶囊列表、设置页为设计列表、登录在主界面右上角。证据见 `docs/ux/model-picker-start.png`、`docs/ux/model-list-settings.png`、`docs/ux/effort-list-settings.png`、`docs/ux/account-login.png`。
+- 没有发起真实订阅登录或在线模型调用。没有提交、推送或部署。
+
 ## 2026-09-08 · Product Agent Workspace 重设计验收
 
 本节为当前重设计结果；下方保留的 2026-09-07 记录描述历史版本，不代表当前 UI 或服务状态。
@@ -123,3 +131,17 @@
 - 使用本机 Chrome 执行 `npm run test:e2e`：12 项通过，覆盖项目管理入口、列表和工作区删除、名称确认、取消、回收站恢复及手机宽度。
 - 独立目录 `/private/tmp/game-prd-delete-clean-ioXROn` 不包含相邻仓库、用户数据和凭证，58 项测试及构建通过。
 - 删除操作只在临时测试数据上执行，未删除用户项目或需求。模型与发布仍使用 Mock，真实在线服务待实测。
+
+### Draft Recovery 与 E2E CI smoke（2026-09-08）
+
+- `npm test`：58 项通过；`npm run build` 和 `git diff --check` 通过。
+- 本机系统 Chrome 完整 `npm run test:e2e`：14 项通过。覆盖需求卡与 PRD 刷新恢复、显式恢复前不覆盖正式内容、旧版本只读预览/放弃、保存后清理，以及浏览器存储异常提示。
+- 新增独立 `@smoke`：新需求 → 需求卡 → 确认 → 原型 → Candidate → Apply → PRD；已通过本地执行。GitHub CI 在 build 后定位系统 Chrome 运行该测试，失败时保留测试附件。
+- GitHub 托管运行仍待后续推送验证；本轮未提交或推送。真实 Codex 与飞书继续待真实环境验收。
+
+### 可拖动左右分栏验收（2026-09-08）
+
+- `npm test` 58 项通过，`npm run build` 与 `git diff --check` 通过。
+- 本机 Chrome 完整 E2E 15 项通过，新增实际鼠标拖动、刷新持久化、双击重置、大纲键盘调宽、编辑/预览分栏、知识分栏和手机无横向溢出验证。
+- 知识文档侧栏定位调整后，专项浏览器测试再次通过，确认从左边缘向左拖动可增大侧栏宽度。
+- 本次仅修改布局交互与偏好存储，未提交或推送。

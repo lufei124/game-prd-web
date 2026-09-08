@@ -1,3 +1,4 @@
+import { ResizeHandle } from "./components/ResizeHandle";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -14,7 +15,6 @@ import {
   FolderOpen,
   Library,
   LoaderCircle,
-  LogOut,
   MessageSquare,
   Monitor,
   PanelRightOpen,
@@ -27,6 +27,7 @@ import {
   Trash2,
   WandSparkles,
   X,
+  Zap,
 } from "lucide-react";
 import { api } from "./api";
 import {
@@ -37,9 +38,16 @@ import "./v2.css";
 import "./workspace.css";
 import { DocumentEditor, MarkdownDocument } from "./components/DocumentEditor";
 import { ExecutionStatus } from "./components/ExecutionStatus";
+import { DraftRecovery } from "./components/DraftRecovery";
 import { useArtifactDraft } from "./components/useArtifactDraft";
 import { KnowledgeDocument } from "./components/KnowledgeDocument";
 import { CommandMenu } from "./components/CommandMenu";
+import { AccountMenu } from "./components/AccountMenu";
+import {
+  EFFORT_OPTIONS,
+  ListSelect,
+  MODEL_OPTIONS,
+} from "./components/ListSelect";
 
 type View = "home" | "knowledge" | "settings" | "workspace";
 type Stage = "requirement" | "prototype" | "prd" | "review";
@@ -86,14 +94,6 @@ const DEFAULT_ROLES: Role[] = [
     focus: "数据、接口、权限、并发、边界、验收标准和可测试性",
   },
 ];
-const EFFORTS = [
-  ["low", "低"],
-  ["medium", "中"],
-  ["high", "高"],
-  ["xhigh", "很高"],
-  ["max", "最大"],
-  ["ultra", "超深"],
-] as const;
 
 const fmt = (value?: string) =>
   value
@@ -277,11 +277,10 @@ function App() {
     return () => clearInterval(timer);
   }, [requirementId]);
   useEffect(() => {
-    if (view === "settings")
-      api("/status")
-        .then(setStatus)
-        .catch((e) => setError(e.message));
-  }, [view]);
+    api("/status")
+      .then(setStatus)
+      .catch((e) => setError(e.message));
+  }, []);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 2600);
@@ -372,6 +371,13 @@ function App() {
 
   return (
     <div className={`app-shell ${view === "workspace" ? "in-workspace" : ""}`}>
+      <ResizeHandle
+        name="导航宽度"
+        target=".rail"
+        variable="--rail-width"
+        min={160}
+        reserve={600}
+      />
       {manager && (
         <ResourceManager
           mode={manager}
@@ -511,6 +517,9 @@ function App() {
         </div>
       </aside>
       <main className="main-shell">
+        <div className="main-account-dock">
+          <AccountMenu status={status} setStatus={setStatus} run={run} />
+        </div>
         {error && (
           <div className="global-error" role="alert">
             <X size={14} />
@@ -1141,6 +1150,15 @@ function Workspace(props: any) {
       <div
         className={`${showArtifact ? "workbench split" : "workbench"} ${!conversationOpen && showArtifact ? "artifact-focus" : ""}`}
       >
+        {showArtifact && conversationOpen && (
+          <ResizeHandle
+            name="对话与成果分栏"
+            target=".conversation-pane"
+            variable="--conversation-width"
+            min={260}
+            reserve={360}
+          />
+        )}
         <div className="conversation-pane">
           <Conversation
             messages={workspace?.messages || []}
@@ -1186,6 +1204,7 @@ function Workspace(props: any) {
           <div className="artifact-pane">
             {stage === "requirement" && requirementVersion && (
               <RequirementArtifact
+                key={requirementId}
                 references={versionReferences(requirementVersion, workspace)}
                 version={requirementVersion}
                 confirmed={req.confirmed?.requirement === requirementVersion.id}
@@ -1229,6 +1248,7 @@ function Workspace(props: any) {
             )}
             {(stage === "prd" || stage === "review") && prdVersion && (
               <PrdArtifact
+                key={requirementId}
                 workspace={workspace}
                 requirementId={requirementId}
                 prdVersion={prdVersion}
@@ -1425,23 +1445,27 @@ function Composer({
               />
             </label>
           )}
-          <input
-            aria-label="本次模型"
-            className="inline-model"
+          <ListSelect
+            variant="pill"
+            placement="above"
+            label="本次模型"
+            heading="默认"
+            description="推荐模型"
             value={model}
-            onChange={(e) => onModelChange?.(e.target.value)}
+            options={MODEL_OPTIONS}
+            icon={<Zap size={13} />}
+            onChange={(next) => onModelChange?.(next)}
           />
-          <select
-            aria-label="本次思考深度"
+          <ListSelect
+            variant="pill"
+            placement="above"
+            label="本次思考深度"
+            heading="强度"
+            description="本次任务的推理强度"
             value={effort}
-            onChange={(e) => onEffortChange?.(e.target.value)}
-          >
-            {EFFORTS.map(([value, text]) => (
-              <option key={value} value={value}>
-                {text}
-              </option>
-            ))}
-          </select>
+            options={EFFORT_OPTIONS}
+            onChange={(next) => onEffortChange?.(next)}
+          />
           {fixedCount > 0 && <span>重点资料 {fixedCount}</span>}
         </div>
         {onStop ? (
@@ -1482,8 +1506,8 @@ function RequirementArtifact({
   onRefresh,
   run,
 }: any) {
-  const { content, setContent, dirty, conflict, acceptLatest } =
-    useArtifactDraft(version);
+  const draft = useArtifactDraft(version);
+  const { content, setContent, dirty, conflict, acceptLatest } = draft;
   const save = () =>
     run(async () => {
       await api(`/requirements/${requirementId}/versions`, "POST", {
@@ -1519,12 +1543,14 @@ function RequirementArtifact({
         </>
       }
     >
+      <DraftRecovery draft={draft} version={version} />
       <DraftConflict
         conflict={conflict}
         content={content}
         onLatest={acceptLatest}
       />
       <DocumentEditor
+        recoveryPending={draft.recovery.some((d) => d.base === version.id)}
         label="需求卡编辑器"
         content={content}
         onChange={setContent}
@@ -1734,8 +1760,8 @@ function PrdArtifact({
   onRefresh,
   run,
 }: any) {
-  const { content, setContent, dirty, conflict, acceptLatest } =
-    useArtifactDraft(prdVersion);
+  const draft = useArtifactDraft(prdVersion);
+  const { content, setContent, dirty, conflict, acceptLatest } = draft;
   const [tab, setTab] = useState<"prd" | "review" | "showme">("prd");
   const [briefId, setBriefId] = useState("");
 
@@ -1985,12 +2011,16 @@ function PrdArtifact({
     >
       {tab === "prd" && (
         <div className="prd-edit-wrap">
+          <DraftRecovery draft={draft} version={prdVersion} />
           <DraftConflict
             conflict={conflict}
             content={content}
             onLatest={acceptLatest}
           />
           <DocumentEditor
+            recoveryPending={draft.recovery.some(
+              (d) => d.base === prdVersion.id,
+            )}
             label="PRD 文档编辑器"
             content={content}
             onChange={setContent}
@@ -2433,6 +2463,13 @@ function KnowledgeView({
         </div>
       </header>
       <div className="knowledge-grid">
+        <ResizeHandle
+          name="知识来源与文档分栏"
+          target=".source-column"
+          variable="--source-width"
+          min={180}
+          reserve={300}
+        />
         <div className="source-column">
           <div className="section-title">
             <b>资料源</b>
@@ -2732,26 +2769,28 @@ function SettingsView({
             </span>
           </div>
           <div className="form-grid">
-            <label>
-              模型 ID
-              <input
+            <div className="list-field">
+              <span>模型 ID</span>
+              <ListSelect
+                label="模型 ID"
+                heading="默认"
+                description="推荐模型"
                 value={effectiveModel}
-                onChange={(e) => setModel(e.target.value)}
+                options={MODEL_OPTIONS}
+                onChange={setModel}
               />
-            </label>
-            <label>
-              思考深度
-              <select
+            </div>
+            <div className="list-field">
+              <span>思考深度</span>
+              <ListSelect
+                label="思考深度"
+                heading="强度"
+                description="默认推理强度"
                 value={effectiveEffort}
-                onChange={(e) => setEffort(e.target.value)}
-              >
-                {EFFORTS.map(([value, text]) => (
-                  <option value={value} key={value}>
-                    {text}
-                  </option>
-                ))}
-              </select>
-            </label>
+                options={EFFORT_OPTIONS}
+                onChange={setEffort}
+              />
+            </div>
           </div>
           <div className="setting-actions">
             <button
@@ -2760,35 +2799,6 @@ function SettingsView({
             >
               刷新状态
             </button>
-            {status?.codex?.state === "configured" ? (
-              <button
-                className="ghost"
-                onClick={() =>
-                  run(async () => {
-                    await api("/codex/logout", "POST", {});
-                    setStatus(await api("/status"));
-                  }, "Codex 已退出")
-                }
-              >
-                <LogOut size={15} /> 退出登录
-              </button>
-            ) : (
-              <button
-                className="ghost"
-                onClick={() =>
-                  run(async () => {
-                    const login = await api("/codex/login", "POST", {});
-                    window.open(
-                      login.verificationUri || login.verification_uri,
-                      "_blank",
-                    );
-                    setStatus(await api("/status"));
-                  }, "已发起 Codex 登录")
-                }
-              >
-                使用 ChatGPT 登录
-              </button>
-            )}
             <button className="primary" onClick={saveAssistant}>
               保存
             </button>

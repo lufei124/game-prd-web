@@ -199,7 +199,7 @@ button.primary {
 .workspace-topbar {
   min-height: 62px;
   height: auto;
-  padding: 10px 18px;
+  padding: 10px 132px 10px 18px;
   background: #fff;
   gap: 12px;
   align-items: center;
@@ -1750,5 +1750,305 @@ button.primary {
   .project-management-actions .icon-button {
     width: 24px;
     justify-content: center;
+  }
+}
+
+.main-account-dock {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  z-index: 50;
+}
+.account-trigger,
+.list-select-pill,
+.list-select-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  cursor: pointer;
+  color: var(--ink);
+  min-width: 0;
+}
+.account-trigger,
+.list-select-pill {
+  background: #f3f3f3;
+  border-radius: 999px;
+  padding: 5px 9px 5px 8px;
+  font-size: 12px;
+  min-height: 28px;
+}
+.account-trigger:hover,
+.list-select-pill:hover,
+.list-select-field:hover {
+  background: #ececec;
+}
+.account-trigger:active,
+.list-select-pill:active,
+.list-select-field:active {
+  transform: scale(0.96);
+}
+.list-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.list-field > span {
+  font-size: 11px;
+  color: #777;
+}
+.list-select-field {
+  width: 100%;
+  justify-content: space-between;
+  background: #fff;
+  border: 1px solid #e4e4e4;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 13px;
+  min-height: 38px;
+}
+.list-select-pill > span,
+.list-select-field > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.list-select-pill em,
+.list-select-field em {
+  font-style: normal;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.list-select-pill svg,
+.account-trigger svg,
+.list-select-field svg {
+  flex-shrink: 0;
+  color: #444;
+}
+.list-popover {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: min(280px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  padding: 10px 8px 8px;
+  background: #fff;
+  color: var(--ink);
+  border: 1px solid #e8e8e8;
+  border-radius: 18px;
+  box-shadow: 0 10px 36px #2020201a;
+  z-index: 80;
+}
+.list-popover-label {
+  font-size: 11px;
+  color: #8a8a8a;
+  padding: 4px 10px 2px;
+}
+.list-popover-heading {
+  font-size: 14px;
+  font-weight: 650;
+  padding: 2px 10px 0;
+}
+.list-popover-desc {
+  font-size: 11px;
+  color: #8a8a8a;
+  padding: 1px 10px 8px;
+}
+.designed-list + .designed-list {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f0f0f0;
+}
+.list-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+}
+.list-option:hover,
+.list-option[data-active="true"],
+.list-option[aria-selected="true"]:hover {
+  background: #f3f3f3;
+}
+.list-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.list-option small {
+  color: #8a8a8a;
+  font-size: 11px;
+}
+.account-popover {
+  width: min(300px, calc(100vw - 24px));
+}
+.account-detail,
+.account-code {
+  margin: 0;
+  padding: 0 10px 10px;
+  color: #666;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.account-code strong {
+  font-variant-numeric: tabular-nums;
+}
+.account-link {
+  display: inline-flex;
+  margin: 0 10px 10px;
+  color: var(--ink);
+  font-size: 12px;
+}
+.account-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 6px 2px;
+}
+.composer-controls .list-select-pill {
+  max-width: min(240px, 58vw);
+}
+@media (max-width: 980px) {
+  .workspace-topbar {
+    padding-right: 18px;
+    padding-top: 48px;
+  }
+  .page-header {
+    padding-top: 28px;
+  }
+}
+
+/* Shared desktop splitters: a quiet line with a generous pointer target. */
+.app-shell,
+.workbench,
+.document-layout,
+.knowledge-grid {
+  position: relative;
+}
+.resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  transform: translateX(-50%);
+  z-index: 25;
+  cursor: col-resize;
+  touch-action: none;
+  outline-offset: -3px;
+}
+.resize-handle::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.resize-handle:hover::after,
+.resize-handle:focus-visible::after {
+  background: #888;
+  width: 2px;
+}
+.resize-hidden {
+  display: none;
+}
+.resizing-panels,
+.resizing-panels * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+.resizing-panels iframe {
+  pointer-events: none;
+}
+@media (min-width: 1151px) {
+  .app-shell {
+    grid-template-columns: clamp(160px, var(--rail-width, 184px), 30vw) minmax(
+        0,
+        1fr
+      );
+  }
+  .document-layout {
+    grid-template-columns:
+      clamp(100px, var(--outline-width, 140px), 35%)
+      minmax(0, 1fr);
+  }
+  .document-layout.split {
+    grid-template-columns:
+      clamp(100px, var(--outline-width, 140px), 25%)
+      minmax(150px, var(--editor-width, 1fr)) minmax(150px, 1fr);
+  }
+}
+@media (min-width: 761px) {
+  .workbench.split:not(.artifact-focus) {
+    grid-template-columns:
+      clamp(260px, var(--conversation-width, 340px), 60%)
+      minmax(0, 1fr);
+  }
+  .knowledge-grid {
+    grid-template-columns: clamp(180px, var(--source-width, 280px), 55%) minmax(
+        0,
+        1fr
+      );
+  }
+}
+@media (min-width: 761px) and (max-width: 1150px) {
+  .document-layout.split {
+    grid-template-columns: minmax(150px, var(--editor-width, 1fr)) minmax(
+        150px,
+        1fr
+      );
+  }
+}
+@media (max-width: 1150px) {
+  .app-shell > .resize-handle {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .resize-handle {
+    display: none;
+  }
+}
+@media (min-width: 1151px) {
+  .document-layout.split {
+    grid-template-columns:
+      clamp(100px, var(--outline-width, 140px), 25%) clamp(
+        150px,
+        var(
+          --editor-width,
+          calc((100% - clamp(100px, var(--outline-width, 140px), 25%)) / 2)
+        ),
+        calc(100% - clamp(100px, var(--outline-width, 140px), 25%) - 150px)
+      )
+      minmax(150px, 1fr);
+  }
+}
+@media (min-width: 761px) and (max-width: 1150px) {
+  .document-layout.split {
+    grid-template-columns:
+      clamp(150px, var(--editor-width, 50%), calc(100% - 150px))
+      minmax(150px, 1fr);
+  }
+}
+@media (min-width: 761px) {
+  .knowledge-drawer {
+    width: min(var(--knowledge-drawer-width, 660px), calc(100vw - 28px));
+  }
+  .knowledge-drawer > .resize-handle {
+    transform: none;
+    position: absolute;
+    left: 0;
   }
 }

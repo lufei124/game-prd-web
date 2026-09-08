@@ -41,7 +41,8 @@
 │              ├─ Review Inbox：逐项裁决 / 应用采纳
 │              └─ Presentation：独立预览 / 版本 / HTML 导出
 ├─ Knowledge：来源筛选 → 文档 → 只读版本侧栏
-└─ Settings：Codex / Model / Reasoning / Template / Review Roles
+└─ Settings：Codex 默认模型与思考深度 / Template / Review Roles
+   右上角：ChatGPT 订阅登录
 ```
 
 ## 5. Core Interaction Changes
@@ -58,8 +59,9 @@
 | Knowledge | Local/Feishu/Upload/具体 Source 筛选；空搜索真实为空；长标题收敛；侧栏读取指定版本正文、表格与来源元数据。 |
 | Citation | Hover/键盘 Focus 显示来源；人工修订与恢复沿父版本查找冻结引用；只读取冻结 knowledgeId，不替换成最新文档。 |
 | Execution | 就绪、等待执行、运行、等待回答、完成、失败、停止、中断和重试；详情展开原始事件，Debug 单独折叠。 |
+| Model / Login | 模型与思考深度使用自定义列表；ChatGPT 登录在主界面右上角，不在设置卡内。 |
 
-未保存草稿仅是当前页面生命周期内的 UI scratch space，按需求与成果类型保留。切换页面/成果后可恢复；若正式版本变化，保留草稿、禁用覆盖保存，允许导出或明确放弃草稿载入新版。刷新浏览器会丢失未保存草稿，正式保存仍调用版本 API。
+未保存草稿使用浏览器 localStorage 做本地恢复，按 requirementId、artifactKind、baseVersionId 隔离。编辑后 debounce 700ms 写入，页面隐藏或离开时补写。重新进入时明确选择恢复或放弃；基础版本变化时只能查看旧草稿或放弃，不能自动覆盖当前版本。正式保存仍调用原版本 API，保存成功后清除对应备份。
 
 ## 6. Visual System
 
@@ -75,6 +77,8 @@
 | 文件 | 职责 |
 | --- | --- |
 | `web/main-v2.tsx` | 工作区、导航、Composer、Inspect/Candidate、Review/Show Me、Knowledge 筛选与新组件接线。 |
+| `web/components/ListSelect.tsx` | 模型与思考深度的自定义列表。 |
+| `web/components/AccountMenu.tsx` | 主界面右上角订阅登录。 |
 | `web/workspace.css` | 新工作台设计 token、布局、状态、文档、弹窗和响应式；覆盖现有基础样式，兼容旧组件。 |
 | `web/components/DocumentEditor.tsx` | 安全文档渲染、大纲、编辑/对照、版本差异摘要、冻结引用预览。 |
 | `web/components/ExecutionStatus.tsx` | 统一任务状态、停止/重试、事件详情与 Recall Debug。 |
@@ -108,7 +112,7 @@
 - 真实 ChatGPT 订阅调用、真实飞书源同步与发布待配置/待实测；Mock 通过不代表在线服务已验收。
 - Markdown renderer 支持标题、基本列表、表格、引用、代码和 K 引用；不是完整 CommonMark/GFM 富文本引擎，复杂嵌套或嵌入 HTML 会保留为安全文本。
 - 版本差异摘要显示新增/修改行与字符变化（最多 60 行），不提供逐字符/删除行 diff。
-- 草稿缓存只在当前页面生命周期保留；刷新前需保存或导出。不会把草稿伪装成正式版本。
+- 本地草稿不属于正式版本，也不跨浏览器同步；存储不可用时提示备份失败。浏览器清理数据会移除备份，崩溃可能丢失最后 700ms 的输入。
 - Grilling 仍使用现有自由文本问题与 conversation 提交；没有对任意模型输出猜测可点击答案。
 - Show Me 保留当前 PRD 成果组入口，但拥有独立标题、版本预览和导出；没有另建业务状态。
 
@@ -135,3 +139,21 @@
 知识版本侧栏：
 
 ![知识文档](ux/knowledge-document.png)
+
+自定义模型列表与右上角登录：
+
+![输入框模型选择](ux/model-picker-start.png)
+
+![设置页模型列表](ux/model-list-settings.png)
+
+![设置页思考深度](ux/effort-list-settings.png)
+
+![右上角登录](ux/account-login.png)
+
+### 持续回归基线
+
+GitHub CI 在单元测试和构建后使用系统 Chrome 运行 `@smoke`：新需求 → 需求卡 → 确认 → 原型 → 候选 → 应用 → PRD。完整浏览器测试继续供本地回归，模型与发布均为 Mock。后续 UI 改动应保持本文的交互设计原则。
+
+### 可拖动左右分栏
+
+桌面端导航、对话与成果、文档大纲与正文、编辑与预览、知识来源与文档，以及知识文档侧栏支持拖动调宽。悬停分隔线显示反馈，双击恢复默认，方向键以 10px 调整（Shift 为 40px）。宽度按布局类型保存在当前浏览器；设置最小宽度与可用空间约束，窄屏使用原响应式布局。布局偏好不改变业务数据。

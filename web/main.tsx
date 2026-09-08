@@ -1565,9 +1565,6 @@ function App() {
                       <ModelPicker
                         model={effectiveModel}
                         effort={effectiveEffort}
-                        executor={effectiveExecutor}
-                        models={modelChoices}
-                        efforts={effortOptions}
                         onChange={(model, effort) => {
                           setTaskModel(model);
                           setReasoningEffort(effort);

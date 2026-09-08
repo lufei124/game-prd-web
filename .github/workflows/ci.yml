@@ -19,3 +19,15 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - name: Locate system Chrome
+        run: |
+          CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          test -x "$CHROME_PATH"
+          echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE=$CHROME_PATH" >> "$GITHUB_ENV"
+      - name: Core interaction smoke (Mock)
+        run: npm run test:e2e -- --grep @smoke
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: test-results/

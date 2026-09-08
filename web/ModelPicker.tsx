@@ -1,54 +1,83 @@
-import React, { useId, useRef, useState } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import React, { useEffect, useId, useRef, useState } from "react";
+import { Check, ChevronDown, Zap } from "lucide-react";
+import {
+  EFFORT_OPTIONS,
+  MODEL_OPTIONS,
+  effortLabel,
+  modelLabel,
+  withCurrentOption,
+  type ListOption,
+} from "./components/ListSelect";
+
+export {
+  EFFORT_OPTIONS,
+  MODEL_OPTIONS,
+  effortLabel,
+  modelLabel,
+} from "./components/ListSelect";
+
 export function ModelPicker({
   model,
   effort,
-  executor,
-  models,
-  efforts,
   onChange,
 }: {
   model: string;
   effort: string;
-  executor: string;
-  models: string[];
-  efforts: { value: string; label: string }[];
   onChange: (model: string, effort: string) => void;
 }) {
-  const id = useId(),
-    menu = useRef<HTMLDivElement>(null),
-    trigger = useRef<HTMLButtonElement>(null);
-  const [custom, setCustom] = useState("");
-  const label = (value: string) =>
-    value.replace(/^gpt-/, "").replace(/-/g, " ");
+  const id = useId();
+  const menu = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const models = withCurrentOption(MODEL_OPTIONS, model);
+  const [active, setActive] = useState(model);
+
+  useEffect(() => setActive(model), [model]);
+
   function toggle() {
-    const node = menu.current!;
+    const node = menu.current;
+    const button = trigger.current;
+    if (!node || !button) return;
     if (node.matches(":popover-open")) {
       node.hidePopover();
       return;
     }
-    setCustom(model);
     node.showPopover();
-    const anchor = trigger.current!.getBoundingClientRect();
-    node.style.left = `${Math.max(12, Math.min(anchor.right - node.offsetWidth, innerWidth - node.offsetWidth - 12))}px`;
-    node.style.top = `${Math.max(12, anchor.top - node.offsetHeight - 10)}px`;
+    const anchor = button.getBoundingClientRect();
+    const left = Math.max(
+      12,
+      Math.min(anchor.left, innerWidth - node.offsetWidth - 12),
+    );
+    node.style.left = `${left}px`;
+    node.style.top = `${Math.max(12, anchor.top - node.offsetHeight - 8)}px`;
+    setActive(model);
   }
+
+  function pickModel(value: string) {
+    onChange(value, effort);
+    setActive(value);
+  }
+
+  function pickEffort(value: string) {
+    onChange(model, value);
+    menu.current?.hidePopover();
+    trigger.current?.focus();
+  }
+
   return (
     <>
       <button
         ref={trigger}
-        className="composer-model"
+        type="button"
+        className="list-select-pill composer-model"
         aria-label="选择本次任务模型与思考深度"
         aria-haspopup="dialog"
         aria-controls={id}
         onClick={toggle}
       >
-        <span>{label(model)}</span>
-        <span className="composer-effort">
-          {efforts.find((x) => x.value === effort)?.label.split(" · ")[0] ||
-            effort}
-        </span>
-        <ChevronDown size={16} />
+        <Zap size={13} />
+        <span>{modelLabel(model)}</span>
+        <em>{effortLabel(effort)}</em>
+        <ChevronDown size={14} />
       </button>
       <div
         id={id}
@@ -56,70 +85,74 @@ export function ModelPicker({
         popover="auto"
         role="dialog"
         aria-label="本次任务模型"
-        className="model-popover"
+        className="list-popover model-popover"
       >
-        <div className="model-menu-label">
-          模型 · Codex
-        </div>
-        {[
-          ...new Set([
-            model,
-            ...models.filter((x) => !x.startsWith("claude")),
-          ]),
-        ].map((value) => (
-          <button
-            key={value}
-            className="model-option"
-            aria-pressed={model === value}
-            onClick={() => {
-              onChange(value, effort);
-              setCustom(value);
-            }}
-          >
-            <span>{label(value)}</span>
-            {model === value && <Check size={16} />}
-          </button>
-        ))}
-        <div className="model-menu-label">思考深度</div>
-        <div className="effort-options">
-          {efforts.map((x) => (
-              <button
-                key={x.value}
-                aria-pressed={effort === x.value}
-                onClick={() => {
-                  onChange(model, x.value);
-                  menu.current?.hidePopover();
-                  trigger.current?.focus();
-                }}
-              >
-                {x.label.split(" · ")[0]}
-              </button>
-          ))}
-        </div>
-        <details>
-          <summary>自定义模型</summary>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (custom.trim()) {
-                onChange(custom.trim(), effort);
-                menu.current?.hidePopover();
-                trigger.current?.focus();
-              }
-            }}
-          >
-            <input
-              aria-label="自定义模型 ID"
-              required
-              maxLength={120}
-              value={custom}
-              onChange={(e) => setCustom(e.target.value)}
-            />
-            <button type="submit">应用</button>
-          </form>
-        </details>
-        <p>仅用于接下来的任务，可用模型取决于账号权限。助手切换在设置中。</p>
+        <DesignedList
+          label="选择模型"
+          heading="默认"
+          description="推荐模型"
+          value={model}
+          active={active}
+          options={models}
+          onActive={setActive}
+          onChoose={pickModel}
+        />
+        <DesignedList
+          label="思考深度"
+          heading="强度"
+          description="本次任务的推理强度"
+          value={effort}
+          active={effort}
+          options={EFFORT_OPTIONS}
+          onActive={() => {}}
+          onChoose={pickEffort}
+        />
       </div>
     </>
+  );
+}
+
+function DesignedList({
+  label,
+  heading,
+  description,
+  value,
+  active,
+  options,
+  onActive,
+  onChoose,
+}: {
+  label: string;
+  heading: string;
+  description: string;
+  value: string;
+  active: string;
+  options: ListOption[];
+  onActive: (value: string) => void;
+  onChoose: (value: string) => void;
+}) {
+  return (
+    <div className="designed-list">
+      <div className="list-popover-label">{label}</div>
+      <div className="list-popover-heading">{heading}</div>
+      <div className="list-popover-desc">{description}</div>
+      <div role="listbox">
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="option"
+            className="list-option"
+            aria-selected={value === option.value}
+            data-active={active === option.value ? "true" : undefined}
+            onMouseEnter={() => onActive(option.value)}
+            onClick={() => onChoose(option.value)}
+          >
+            <span>{option.label}</span>
+            {value === option.value && <Check size={16} />}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

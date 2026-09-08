@@ -1,3 +1,4 @@
+import { ResizeHandle } from "./ResizeHandle";
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { MarkdownDocument } from "./DocumentEditor";
@@ -39,6 +40,14 @@ export function KnowledgeDocument({ item, versions, onClose }: any) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
+      <ResizeHandle
+        name="知识文档侧栏宽度"
+        target="self"
+        variable="--knowledge-drawer-width"
+        min={360}
+        reserve={60}
+        reverse
+      />
       <header>
         <div>
           <small>文档 · 只读来源</small>
