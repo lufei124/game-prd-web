@@ -15,11 +15,10 @@ import {
   safeName,
 } from "../server/extensions.ts";
 import { Knowledge } from "../server/knowledge.ts";
-import { Tasks, patchContent } from "../server/tasks.ts";
+import { Tasks, patchContent, redact } from "../server/tasks.ts";
 import { PluginRegistry, Delivery, docToken } from "../server/plugins.ts";
 import { bootstrap } from "../server/bootstrap.ts";
 import { createApp } from "../server/app.ts";
-import { claudeEnvironment } from "../server/agent.ts";
 import { metadata, html, prd, MockRuntime, MockLark } from "./fixtures.ts";
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), "forge-test-"));
@@ -561,10 +560,8 @@ test("custom section names are accepted, completeness checks content not fixed h
   assert.ok(completeness("# 漂亮标题").length >= 3);
 });
 
-test("isolated credentials do not inherit environment, remote tokens disallow arbitrary URLs", () => {
-  const env = claudeEnvironment("/tmp/data");
-  assert.equal((env as any).OPENAI_API_KEY, undefined);
-  assert.notEqual(env.HOME, process.env.HOME);
+test("logs redact key-shaped secrets and remote tokens disallow arbitrary URLs", () => {
+  assert.equal(redact("sk-test_secret_123456789"), "[redacted]");
   assert.throws(() => docToken("https://evil.com/docx/abcdef"), /官方/);
   assert.throws(() => docToken("--command=overwrite"), /无效/);
 });

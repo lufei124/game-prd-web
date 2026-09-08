@@ -15,7 +15,6 @@ import {
 import {
   codexStatus,
   codexBinary,
-  codexAuthMode,
   withCodexAuth,
 } from "./codex-auth.ts";
 export { codexStatus } from "./codex-auth.ts";
@@ -67,10 +66,6 @@ export class CodexExecutor implements AgentRuntime {
     await createCodexLauncher(await realpath(work), binary, profile);
     const codex = this.client({
       codexPathOverride: wrapper,
-      apiKey:
-        codexAuthMode() === "api-key"
-          ? process.env.WORKBENCH_CODEX_API_KEY
-          : undefined,
       env: {
         PATH: "/usr/bin:/bin",
         HOME: home,
@@ -207,17 +202,6 @@ export function renderContextPack(pack: any) {
         `[${item.citationId}] ${item.title}\nsource=${item.sourceType}; revision=${item.sourceRevision ?? "unknown"}; capturedAt=${item.capturedAt}; heading=${item.heading || "(root)"}; url/path=${item.sourceUrl || item.sourcePath || "local"}; possibleConflict=${Boolean(item.possibleConflict)}\n${item.content}`,
     )
     .join("\n\n")}`;
-}
-export class RuntimeRouter implements AgentRuntime {
-  constructor(
-    private claude: AgentRuntime,
-    private executor = new CodexExecutor(),
-  ) {}
-  async run(input: AgentInput, host: AgentHost) {
-    if ((input.snapshot.executor || "codex") === "codex")
-      return this.executor.run(input, host);
-    return this.claude.run(input, host);
-  }
 }
 export function codexThreadOptions(
   input: AgentInput,

@@ -95,7 +95,7 @@ task.candidate
 
 PRD 阶段只读取全局 PRD 模板，不允许需求级/项目级模板覆盖。
 
-`ClaudeRuntime` 暂时保留在底层用于历史兼容和旧测试，但新版产品 UI 不展示 Claude，正常对话路径也不会选择它。
+服务端只有 Codex 执行器，认证固定为 ChatGPT 订阅登录。
 
 ### `server/codex.ts`
 
@@ -115,7 +115,7 @@ PRD 阶段只读取全局 PRD 模板，不允许需求级/项目级模板覆盖�
 
 ### `server/codex-auth.ts`
 
-管理订阅登录、API Key 模式和本机 Codex Skills 镜像。
+管理 ChatGPT 订阅登录和本机 Codex Skills 镜像。
 
 Skills 来源：
 
@@ -337,10 +337,9 @@ Review vN (optional)
 
 - `server/extensions.ts`
 - 旧内置 SKILL.md / Style release
-- `ClaudeRuntime`
 - 旧直接任务 API
 
-它们暂时只服务历史数据、迁移与兼容测试。新版 Web 不再显示扩展中心、阶段 Skill 选择、风格 Skill 选择或 Claude 配置。
+它们暂时只服务历史数据、迁移与兼容测试。新版 Web 不再显示扩展中心、阶段 Skill 选择或风格 Skill 选择。
 
 全局 PRD 模板目前仍利用旧 template release 作为底层版本容器；后续可以在完成数据迁移后再删除 Extension 子系统，而不是在本次 UI 重构中破坏历史记录。
 

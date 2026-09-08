@@ -59,16 +59,12 @@ export function ModelPicker({
         className="model-popover"
       >
         <div className="model-menu-label">
-          模型 · {executor === "codex" ? "Codex" : "Claude"}
+          模型 · Codex
         </div>
         {[
           ...new Set([
             model,
-            ...models.filter((x) =>
-              executor === "codex"
-                ? !x.startsWith("claude")
-                : x.startsWith("claude"),
-            ),
+            ...models.filter((x) => !x.startsWith("claude")),
           ]),
         ].map((value) => (
           <button
@@ -86,9 +82,7 @@ export function ModelPicker({
         ))}
         <div className="model-menu-label">思考深度</div>
         <div className="effort-options">
-          {efforts
-            .filter((x) => executor === "codex" || x.value !== "ultra")
-            .map((x) => (
+          {efforts.map((x) => (
               <button
                 key={x.value}
                 aria-pressed={effort === x.value}
@@ -100,7 +94,7 @@ export function ModelPicker({
               >
                 {x.label.split(" · ")[0]}
               </button>
-            ))}
+          ))}
         </div>
         <details>
           <summary>自定义模型</summary>

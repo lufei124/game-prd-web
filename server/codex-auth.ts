@@ -37,10 +37,6 @@ export function codexBinary() {
   }
 }
 
-export const codexAuthMode = () =>
-  process.env.WORKBENCH_CODEX_AUTH_MODE === "api-key"
-    ? "api-key"
-    : "subscription";
 export const authHome = (root: string) => join(root, "codex-auth");
 export const authEnv = (home: string) => ({
   PATH: "/usr/bin:/bin",
@@ -105,11 +101,10 @@ export async function syncLocalCodexSkills(home: string) {
 }
 
 export async function codexStatus(root: string) {
-  const binary = codexBinary(),
-    mode = codexAuthMode();
+  const binary = codexBinary();
   const skillRoot = desktopSkillsRoot();
   const base = {
-    mode,
+    mode: "subscription" as const,
     home: authHome(root),
     binary: binary || null,
     skills: {
@@ -133,16 +128,6 @@ export async function codexStatus(root: string) {
       ...base,
       state: "unsupported",
       detail: "严格目录隔离目前仅支持 macOS",
-    };
-  if (mode === "api-key")
-    return {
-      ...base,
-      state: process.env.WORKBENCH_CODEX_API_KEY
-        ? "configured"
-        : "unconfigured",
-      detail: process.env.WORKBENCH_CODEX_API_KEY
-        ? "API Key 已配置，按 API 计费；真实调用待实测"
-        : "待配置 WORKBENCH_CODEX_API_KEY",
     };
   if (!existsSync(join(authHome(root), "auth.json")))
     return {
@@ -185,11 +170,6 @@ export async function startCodexLogin(root: string) {
     return current;
   const binary = codexBinary();
   check(binary, "未找到 Codex CLI", 409);
-  check(
-    codexAuthMode() === "subscription",
-    "请将 WORKBENCH_CODEX_AUTH_MODE 设为 subscription 后重启",
-    409,
-  );
   const home = authHome(root);
   await mkdir(home, { recursive: true, mode: 0o700 });
   const loginHome = await mkdtemp(join(home, "login-"));
@@ -290,7 +270,6 @@ export async function withCodexAuth<T>(
   signal.throwIfAborted();
   await mkdir(home, { recursive: true, mode: 0o700 });
   await syncLocalCodexSkills(home);
-  if (codexAuthMode() === "api-key") return run();
   check(logins.get(root)?.state !== "waiting", "请先完成订阅登录", 409);
   check(
     !active.has(root),

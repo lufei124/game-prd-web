@@ -39,7 +39,7 @@ export async function purgeProject(
     }
     await rm(join(s.root, ...parts), { recursive: true, force: true });
   }
-  // Claude stores transcripts under its encoded working directory, separate from credentials.
+  // Legacy task transcripts use an encoded working directory, separate from credentials.
   const transcripts = join(s.root, "agent-home", ".claude", "projects");
   for (const { kind, data } of trash.entries)
     if (kind === "task") {

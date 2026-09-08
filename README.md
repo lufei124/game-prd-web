@@ -176,7 +176,7 @@ PRD 后可以额外生成「需求评审讲解」。
 
 ## Codex
 
-产品界面只支持 Codex，不再提供 Claude 选择和 Claude 配置。
+产品界面和服务端只支持 Codex，并且只支持 ChatGPT 订阅登录。不提供 API Key 或 Claude 执行路径。
 
 默认配置：
 
@@ -194,17 +194,6 @@ PRD 后可以额外生成「需求评审讲解」。
 3. 打开官方设备登录页面并完成授权。
 
 认证文件独立保存在 `.data/codex-auth/`。为避免订阅凭证刷新冲突，同一工作台一次只执行一个订阅 Codex 任务。
-
-也可以显式改成 API Key 模式：
-
-```dotenv
-WORKBENCH_CODEX_AUTH_MODE=api-key
-WORKBENCH_CODEX_API_KEY=你的独立_OpenAI_API_Key
-WORKBENCH_CODEX_BINARY=/可选/自定义/codex
-PORT=4317
-```
-
-API Key 与 ChatGPT 订阅额度独立计费。
 
 ### 复用本机 Codex Skills
 

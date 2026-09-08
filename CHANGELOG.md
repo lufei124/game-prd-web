@@ -1,5 +1,10 @@
 # 变更记录
 
+## 2026-09-08 · 订阅登录单一路径
+
+- 执行器收敛为 Codex，认证只支持 ChatGPT 订阅账号的官方设备登录。
+- 移除 API Key 认证分支、Claude 运行时与过时的 `.env.example`。
+
 ## 2026-09-08 · Knowledge Context Engine MVP
 
 - 新增 Source/Document/Version 追踪、持久 Chunk、SQLite FTS5、确定性 Recall/Query/Scope/Rerank/Source Reader、token budget、ContextPack、RecallTrace 与 K 引用。

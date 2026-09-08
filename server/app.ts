@@ -22,9 +22,9 @@ import { conversationOptions } from "./conversation.ts";
 import { KnowledgeTree } from "./knowledge-tree.ts";
 import { Knowledge } from "./knowledge.ts";
 import { Tasks, redact } from "./tasks.ts";
-import { ClaudeRuntime, type AgentRuntime } from "./agent.ts";
+import { type AgentRuntime } from "./agent.ts";
 import { startCodexLogin, logoutCodex } from "./codex-auth.ts";
-import { RuntimeRouter, codexStatus } from "./codex.ts";
+import { CodexExecutor, codexStatus } from "./codex.ts";
 import {
   PluginRegistry,
   LarkPlugin,
@@ -63,7 +63,7 @@ export async function createApp(
     domain,
     extensions,
     knowledge,
-    options.runtime || new RuntimeRouter(new ClaudeRuntime()),
+    options.runtime || new CodexExecutor(),
   );
   tasks.recover();
   const app = express();
@@ -999,14 +999,6 @@ export async function createApp(
   route("post", "/api/codex/login", () => startCodexLogin(root));
   route("post", "/api/codex/logout", () => logoutCodex(root));
   route("get", "/api/status", async () => ({
-    claude: {
-      state: process.env.WORKBENCH_ANTHROPIC_API_KEY
-        ? "configured"
-        : "unconfigured",
-      detail: process.env.WORKBENCH_ANTHROPIC_API_KEY
-        ? "独立 API key 已配置；点击测试验证真实调用"
-        : "待配置 WORKBENCH_ANTHROPIC_API_KEY，不共享桌面登录",
-    },
     codex: await codexStatus(root),
     feishu: await registry.get("feishu").status(),
     storage: root,

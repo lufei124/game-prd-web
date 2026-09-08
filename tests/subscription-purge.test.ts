@@ -16,7 +16,6 @@ import { Domain } from "../server/domain.ts";
 import { purgeProject } from "../server/project-purge.ts";
 import {
   authHome,
-  codexAuthMode,
   codexStatus,
   startCodexLogin,
   logoutCodex,
@@ -25,9 +24,7 @@ import {
 
 test("subscription login lifecycle and isolated token refresh (fake CLI, no online calls)", async () => {
   const root = await mkdtemp(join(tmpdir(), "subscription-test-"));
-  const oldMode = process.env.WORKBENCH_CODEX_AUTH_MODE,
-    oldBinary = process.env.WORKBENCH_CODEX_BINARY;
-  delete process.env.WORKBENCH_CODEX_AUTH_MODE;
+  const oldBinary = process.env.WORKBENCH_CODEX_BINARY;
   const binary = join(root, "fake-codex");
   await writeFile(
     binary,
@@ -36,7 +33,7 @@ test("subscription login lifecycle and isolated token refresh (fake CLI, no onli
   );
   process.env.WORKBENCH_CODEX_BINARY = binary;
   try {
-    assert.equal(codexAuthMode(), "subscription");
+    assert.equal((await codexStatus(root)).mode, "subscription");
     assert.equal((await codexStatus(root)).state, "unconfigured");
     await startCodexLogin(root);
     for (let i = 0; i < 50 && !(await codexStatus(root)).login?.code; i++)
@@ -95,8 +92,6 @@ test("subscription login lifecycle and isolated token refresh (fake CLI, no onli
     await logoutCodex(root);
     assert.equal(existsSync(join(authHome(root), "auth.json")), false);
   } finally {
-    if (oldMode === undefined) delete process.env.WORKBENCH_CODEX_AUTH_MODE;
-    else process.env.WORKBENCH_CODEX_AUTH_MODE = oldMode;
     if (oldBinary === undefined) delete process.env.WORKBENCH_CODEX_BINARY;
     else process.env.WORKBENCH_CODEX_BINARY = oldBinary;
     await rm(root, { recursive: true, force: true });

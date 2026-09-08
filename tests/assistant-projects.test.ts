@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Store } from "../server/db.ts";
@@ -20,9 +20,9 @@ import {
 } from "../server/assistant-settings.ts";
 import {
   CodexExecutor,
-  RuntimeRouter,
   submitCodexOutput,
 } from "../server/codex.ts";
+import { authHome } from "../server/codex-auth.ts";
 import { MockRuntime } from "./fixtures.ts";
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "forge-changes-"));
@@ -90,13 +90,13 @@ test("Codex is default, settings precedence and immutable retry snapshots", asyn
         { reasoningEffort: "bogus" },
       ),
     );
-    assert.equal(
+    assert.deepEqual(
       resolveAssistant(
         { executor: "codex", model: "gpt-5.6-terra" },
         {},
-        { executor: "claude" },
-      ).model,
-      "claude-sonnet-4-6",
+        { executor: "claude", model: "claude-sonnet-4-6" },
+      ),
+      assistantDefaults,
     );
   } finally {
     await f.close();
@@ -226,12 +226,14 @@ test("GitHub import accepts repo, tree and SKILL file, detects ambiguous repos a
 });
 test("Codex SDK adapter passes model and effort for all stages, forwards only controlled proposals (SDK Mock)", async () => {
   const f = await fixture();
-  const oldBinary = process.env.WORKBENCH_CODEX_BINARY,
-    oldKey = process.env.WORKBENCH_CODEX_API_KEY;
-  process.env.WORKBENCH_CODEX_BINARY = "/bin/echo";
-  const oldMode = process.env.WORKBENCH_CODEX_AUTH_MODE;
-  process.env.WORKBENCH_CODEX_AUTH_MODE = "api-key";
-  process.env.WORKBENCH_CODEX_API_KEY = "test-only-not-a-real-key";
+  const oldBinary = process.env.WORKBENCH_CODEX_BINARY;
+  const binary = join(f.root, "fake-codex");
+  await writeFile(binary, '#!/bin/sh\nprintf "Logged in using ChatGPT"\n', {
+    mode: 0o700,
+  });
+  process.env.WORKBENCH_CODEX_BINARY = binary;
+  await mkdir(authHome(f.root), { recursive: true });
+  await writeFile(join(authHome(f.root), "auth.json"), '{"fake":true}');
   try {
     const calls: any[] = [];
     let threadOptions: any, clientOptions: any;
@@ -272,16 +274,8 @@ test("Codex SDK adapter passes model and effort for all stages, forwards only co
       progress: () => {},
       session: () => {},
     };
-    const router = new RuntimeRouter(
-      {
-        run: async () => {
-          throw new Error("must not silently use Claude");
-        },
-      },
-      runtime,
-    );
     for (const kind of ["requirement", "prototype", "prd", "review"])
-      await router.run(
+      await runtime.run(
         {
           id: kind,
           kind,
@@ -302,6 +296,7 @@ test("Codex SDK adapter passes model and effort for all stages, forwards only co
     assert.equal(threadOptions.modelReasoningEffort, "high");
     assert.equal(threadOptions.sandboxMode, "read-only");
     assert.equal(clientOptions.config.features.shell_tool, false);
+    assert.equal(clientOptions.apiKey, undefined);
     assert.equal(clientOptions.env.ANTHROPIC_API_KEY, undefined);
     assert.equal(calls.filter((x) => x.n === "propose_artifact").length, 4);
     await submitCodexOutput(
@@ -321,10 +316,6 @@ test("Codex SDK adapter passes model and effort for all stages, forwards only co
   } finally {
     if (oldBinary === undefined) delete process.env.WORKBENCH_CODEX_BINARY;
     else process.env.WORKBENCH_CODEX_BINARY = oldBinary;
-    if (oldMode === undefined) delete process.env.WORKBENCH_CODEX_AUTH_MODE;
-    else process.env.WORKBENCH_CODEX_AUTH_MODE = oldMode;
-    if (oldKey === undefined) delete process.env.WORKBENCH_CODEX_API_KEY;
-    else process.env.WORKBENCH_CODEX_API_KEY = oldKey;
     await f.close();
   }
 });

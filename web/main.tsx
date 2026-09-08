@@ -103,7 +103,6 @@ const modelChoices = [
   "gpt-6-astra",
   "gpt-5.6-luna",
   "gpt-5.5",
-  "claude-sonnet-4-6",
 ];
 const assistantFields = (v: any): Field[] => [
   {
@@ -111,10 +110,7 @@ const assistantFields = (v: any): Field[] => [
     label: "默认助手",
     type: "select",
     value: v.executor || "codex",
-    options: [
-      { value: "codex", label: "Codex" },
-      { value: "claude", label: "Claude" },
-    ],
+    options: [{ value: "codex", label: "Codex" }],
   },
   {
     name: "model",
@@ -1104,7 +1100,7 @@ function App() {
                   <Sparkles size={22} />
                   <span>
                     <b>连接产品助手</b>
-                    <small>配置 Codex 与可选 Claude</small>
+                    <small>使用 ChatGPT 订阅账号登录 Codex</small>
                   </span>
                   <ArrowRight size={17} />
                 </button>
@@ -1332,7 +1328,7 @@ function App() {
                   <div>
                     <b>产品助手</b>
                     <small>
-                      {effectiveExecutor === "codex" ? "Codex" : "Claude"} ·{" "}
+                      Codex ·{" "}
                       {effectiveModel}
                     </small>
                   </div>
@@ -2390,21 +2386,9 @@ function App() {
             {[
               [
                 "codex",
-                data.settings.executor === "codex"
-                  ? "Codex · 默认产品助手"
-                  : "Codex · 可选助手",
-                status?.codex?.mode === "api-key"
-                  ? "API Key 模式（单独计费）· WORKBENCH_CODEX_API_KEY"
-                  : "默认使用 ChatGPT 订阅登录 · 自动检测本机 Codex",
+                "Codex · 产品助手",
+                "使用 ChatGPT 订阅登录 · 自动检测本机 Codex",
                 "使用官方 Codex SDK 完成需求整理、原型、PRD 与评审。独立会话与 macOS 沙箱隔离；未连接会明确提示，不会静默切换助手。",
-              ],
-              [
-                "claude",
-                data.settings.executor === "claude"
-                  ? "Claude · 默认产品助手"
-                  : "Claude · 可选助手",
-                "WORKBENCH_ANTHROPIC_API_KEY",
-                "SDK 管理主 Agent 循环与上下文。工具仅能读取任务快照和提交候选成果。",
               ],
               [
                 "feishu",
@@ -2434,17 +2418,14 @@ function App() {
                   <span>
                     {status?.[key]?.state === "configured"
                       ? key === "codex"
-                        ? status.codex.mode === "api-key"
-                          ? "API Key 已配置 · 真实调用待实测"
-                          : "ChatGPT 已登录 · 真实调用待实测"
+                        ? "ChatGPT 已登录 · 真实调用待实测"
                         : "已配置 · 真实调用待实测"
                       : status?.[key]?.detail || "正在检查配置…"}
                   </span>
                 </div>
                 {key === "codex" && (
                   <>
-                    {status?.codex?.mode === "subscription" && (
-                      <div className="config-row login-actions">
+                    <div className="config-row login-actions">
                         {status.codex.state !== "configured" &&
                           status.codex.login?.state !== "waiting" && (
                             <button
@@ -2479,8 +2460,7 @@ function App() {
                               : "取消登录"}
                           </button>
                         )}
-                      </div>
-                    )}
+                    </div>
                     {status?.codex?.state !== "configured" &&
                       status?.codex?.mode === "subscription" &&
                       ["waiting", "failed"].includes(

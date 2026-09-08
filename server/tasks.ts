@@ -775,7 +775,5 @@ export class Tasks {
 }
 
 export function redact(s: string) {
-  for (const key of ["WORKBENCH_ANTHROPIC_API_KEY", "WORKBENCH_CODEX_API_KEY"])
-    if (process.env[key]) s = s.split(process.env[key]!).join("[redacted]");
   return s.replace(/sk-[a-zA-Z0-9_-]{12,}/g, "[redacted]").slice(0, 4000);
 }

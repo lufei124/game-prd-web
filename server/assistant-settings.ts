@@ -1,6 +1,5 @@
 import { z } from "zod";
-import { check } from "./db.ts";
-export const executorSchema = z.enum(["codex", "claude"]);
+export const executorSchema = z.literal("codex");
 export const effortSchema = z.enum([
   "low",
   "medium",
@@ -32,27 +31,21 @@ export function resolveAssistant(
   project: any = {},
   task: any = {},
 ) {
-  const executor = executorSchema.parse(
-    task.executor ||
-      project.executor ||
-      system.executor ||
-      assistantDefaults.executor,
-  );
+  const executor = "codex" as const;
   const layers = [task, project, system];
   const model = modelSchema.parse(
-    layers.find((x) => x.model && (!x.executor || x.executor === executor))
-      ?.model ||
-      (executor === "codex" ? assistantDefaults.model : "claude-sonnet-4-6"),
+    layers.find(
+      (x) =>
+        x.model &&
+        (!x.executor || x.executor === executor) &&
+        !String(x.model).startsWith("claude"),
+    )?.model || assistantDefaults.model,
   );
   const reasoningEffort = effortSchema.parse(
     task.reasoningEffort ||
       project.reasoningEffort ||
       system.reasoningEffort ||
       assistantDefaults.reasoningEffort,
-  );
-  check(
-    executor !== "claude" || reasoningEffort !== "ultra",
-    "Claude 不支持 ultra 思考深度，请选择其他档位",
   );
   return { executor, model, reasoningEffort };
 }
