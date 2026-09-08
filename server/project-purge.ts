@@ -16,8 +16,11 @@ export async function purgeProject(
     check(/^[a-zA-Z0-9_-]+$/.test(value), "无效文件标识，已阻止清理", 409);
     return value;
   };
+  const entries = trash.entries.flatMap((entry: any) =>
+    entry.kind === "requirementTrash" ? entry.data.entries : [entry],
+  );
   const paths: string[][] = [];
-  for (const { kind, data } of trash.entries) {
+  for (const { kind, data } of entries) {
     if (kind === "knowledge") paths.push(["files", safeId(data.id)]);
     if (kind === "task")
       for (const folder of ["codex-work", "codex-home", "agent-work"])
@@ -41,7 +44,7 @@ export async function purgeProject(
   }
   // Legacy task transcripts use an encoded working directory, separate from credentials.
   const transcripts = join(s.root, "agent-home", ".claude", "projects");
-  for (const { kind, data } of trash.entries)
+  for (const { kind, data } of entries)
     if (kind === "task") {
       const encoded = join(s.root, "agent-work", safeId(data.id)).replace(
         /[^a-zA-Z0-9]/g,

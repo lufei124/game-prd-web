@@ -48,10 +48,13 @@ test("v2 entry is conversation-first and hides legacy product UI", async ({
   await expect(page.getByText(/Claude Code|Claude 模型/)).toHaveCount(0);
   await page.getByRole("button", { name: "新需求" }).click();
   await expect(
-    page.getByRole("heading", { name: "描述你想做什么" }),
+    page.getByRole("heading", { name: "今天要设计什么？" }),
   ).toBeVisible();
   await expect(page.locator(".artifact-pane")).toHaveCount(0);
   await expect(page.getByLabel("需求对话输入")).toBeVisible();
+  await page.screenshot({
+    path: `test-results/${process.env.UX_CAPTURE || "after"}-start.png`,
+  });
 });
 
 test("knowledge sources sync and chunk search returns relevant text", async ({
@@ -92,7 +95,7 @@ test("knowledge sources sync and chunk search returns relevant text", async ({
   expect(feishuVersion.sourceUrl).toContain(
     "example.feishu.cn/docx/feishu-rule",
   );
-  const search = page.getByPlaceholder("测试 AI 能否找到某条项目规则…");
+  const search = page.getByPlaceholder("搜索文档或项目规则…");
   await search.fill("超过七天不可退款");
   await search.press("Enter");
   await expect(
@@ -243,6 +246,7 @@ test("full v2 flow keeps prototype edits preview-first and review lineage", asyn
     .toBe("completed");
   const openArtifact = page.getByRole("button", { name: "打开成果" });
   if (await openArtifact.isVisible()) await openArtifact.click();
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
   await expect(page.getByLabel("需求卡编辑器")).toHaveValue(
     /用户每天领取一次奖励/,
   );
@@ -250,20 +254,31 @@ test("full v2 flow keeps prototype edits preview-first and review lineage", asyn
   await page.getByRole("button", { name: "确认需求" }).click();
   const frame = page.frameLocator('iframe[title="交互原型"]');
   await expect(frame.getByRole("button", { name: "领取奖励" })).toBeVisible();
+  await page.screenshot({
+    path: `test-results/${process.env.UX_CAPTURE || "after"}-prototype.png`,
+  });
   const initial = await get(page, `/requirements/${requirement.id}`);
   const initialPrototypeId = initial.requirement.heads.prototype;
   await page.getByRole("button", { name: "点选修改" }).click();
   await frame.getByRole("button", { name: "领取奖励" }).click();
   await expect(page.locator(".selection-chip")).toContainText("#claim");
-  await input.fill("把这个按钮放到右边");
-  await input.press("Enter");
+  await page.getByLabel("选区修改要求").fill("把这个按钮放到右边");
+  await page.getByLabel("选区修改要求").press("Enter");
   await expect(page.getByText(/AI 修改候选，仅预览/)).toBeVisible();
   await expect(frame.locator("#claim")).toHaveAttribute("style", /float:right/);
+  await page.screenshot({ path: "test-results/candidate.png" });
   expect(
     (await get(page, `/requirements/${requirement.id}`)).requirement.heads
       .prototype,
   ).toBe(initialPrototypeId);
-  await page.getByRole("button", { name: "应用修改" }).click();
+  await page.getByRole("button", { name: "当前版本", exact: true }).click();
+  await expect(frame.locator("#claim")).not.toHaveAttribute(
+    "style",
+    /float:right/,
+  );
+  await page.getByRole("button", { name: "候选效果", exact: true }).click();
+  await expect(frame.locator("#claim")).toHaveAttribute("style", /float:right/);
+  await page.keyboard.press("ControlOrMeta+Enter");
   await expect(page.getByText(/AI 修改候选，仅预览/)).toHaveCount(0);
   const afterApply = await get(page, `/requirements/${requirement.id}`);
   expect(afterApply.requirement.heads.prototype).not.toBe(initialPrototypeId);
@@ -293,14 +308,21 @@ test("full v2 flow keeps prototype edits preview-first and review lineage", asyn
   expect(afterDiscard.tasks.at(-1).candidate).toBeNull();
 
   await page.getByRole("button", { name: "确认原型" }).click();
+  await expect(page.locator(".markdown-document")).toContainText("AC-001");
+  await page.screenshot({ path: "test-results/prd-reading.png" });
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
   const prdEditor = page.getByLabel("PRD 文档编辑器");
   await expect(prdEditor).toHaveValue(/AC-001/);
+  await page.screenshot({
+    path: `test-results/${process.env.UX_CAPTURE || "after"}-prd.png`,
+  });
   await prdEditor.fill((await prdEditor.inputValue()) + "\n\n补充人工说明。");
   await page.getByRole("button", { name: "保存 PRD" }).click();
   await page.getByRole("button", { name: /AI 评审/ }).click();
   await page.getByRole("button", { name: "开始评审" }).click();
   const issues = page.locator(".issue-card");
   await expect(issues).toHaveCount(3);
+  await page.screenshot({ path: "test-results/review-inbox.png" });
   await expect(issues.nth(0)).toContainText("产品");
   await expect(issues.nth(1)).toContainText("交互设计");
   await expect(issues.nth(2)).toContainText("研发测试");
@@ -327,6 +349,7 @@ test("full v2 flow keeps prototype edits preview-first and review lineage", asyn
   const appliedPrompt = (await applyRequest).postDataJSON().prompt;
   expect(appliedPrompt).toContain("交互设计");
   expect(appliedPrompt).not.toContain("【产品】");
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
   await expect(prdEditor).toHaveValue(/AC-001/);
   await page.getByRole("button", { name: "确认终稿" }).click();
   const finalized = await get(page, `/requirements/${requirement.id}`);
@@ -343,6 +366,7 @@ test("full v2 flow keeps prototype edits preview-first and review lineage", asyn
   await expect(
     briefFrame.getByText("评审关注点", { exact: true }),
   ).toBeVisible();
+  await page.screenshot({ path: "test-results/presentation.png" });
   const withBrief = await get(page, `/requirements/${requirement.id}`);
   expect(withBrief.reviewBriefs).toHaveLength(1);
   expect(withBrief.reviewBriefs[0].prdVersionId).toBe(
@@ -352,10 +376,15 @@ test("full v2 flow keeps prototype edits preview-first and review lineage", asyn
   await page.getByRole("button", { name: "导出 HTML" }).click();
   await download;
   await page.getByRole("button", { name: "PRD", exact: true }).last().click();
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
   await prdEditor.fill((await prdEditor.inputValue()) + "\n\n终稿后的新修订。");
   await page.getByRole("button", { name: "保存 PRD" }).click();
   await expect(page.getByRole("button", { name: "确认终稿" })).toBeVisible();
   await page.getByRole("button", { name: "评审讲解" }).click();
+  await expect(page.getByText(/讲解版本基于旧 PRD/)).toBeVisible();
+  await page.getByRole("button", { name: "生成新版本", exact: true }).click();
+  await expect(page.locator(".showme-toolbar select option")).toHaveCount(2);
+  await page.locator(".showme-toolbar select").selectOption({ index: 0 });
   await expect(page.getByText(/讲解版本基于旧 PRD/)).toBeVisible();
 
   await page
@@ -433,7 +462,10 @@ test("PRD can skip optional review and records skipped", async ({ page }) => {
   });
   await page.reload();
   await page.getByLabel("当前项目").selectOption(project.id);
-  await page.getByRole("button", { name: /直接终稿/ }).click();
+  await page
+    .locator(".requirement-list")
+    .getByRole("button", { name: /^直接终稿/ })
+    .click();
   await expect(page.getByRole("button", { name: "重新同步" })).toBeVisible();
   await page.getByRole("button", { name: "重新同步" }).click();
   await page.getByRole("button", { name: "跳过评审并确认终稿" }).click();
@@ -473,7 +505,10 @@ test("prototype iframe cannot reach parent storage or the workbench API", async 
   });
   await page.reload();
   await page.getByLabel("当前项目").selectOption(project.id);
-  await page.getByRole("button", { name: /隔离原型/ }).click();
+  await page
+    .locator(".requirement-list")
+    .getByRole("button", { name: /^隔离原型/ })
+    .click();
   const frame = page.frameLocator('iframe[title="交互原型"]');
   await expect(frame.getByRole("button", { name: "领取奖励" })).toBeVisible();
   await expect
@@ -521,4 +556,370 @@ test("settings persist Codex defaults, global template and review roles", async 
     page.locator(".role-row").last().locator("input").nth(0),
   ).toHaveValue("合规");
   await expect(page.getByText("扩展中心", { exact: true })).toHaveCount(0);
+});
+
+test("document reading, draft preservation, history, command menu and narrow workspace", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const project = await createProject(page, "交互与窄屏验收");
+  await page.getByRole("button", { name: "新需求", exact: true }).click();
+  const input = page.getByLabel("需求对话输入");
+  await input.fill("面向每天登录的用户");
+  await input.press("Enter");
+  await expect(page.locator(".markdown-document")).toContainText("需求说明");
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+  const editor = page.getByLabel("需求卡编辑器");
+  await editor.fill((await editor.inputValue()) + "\n\n未保存的草稿");
+  await expect(
+    page.getByRole("button", { name: "确认需求", exact: true }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "收起成果" }).click();
+  await page.getByRole("button", { name: "打开成果" }).click();
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+  await expect(editor).toHaveValue(/未保存的草稿/);
+  await page.getByRole("button", { name: "保存修改" }).click();
+  await page.getByLabel("需求卡历史版本").selectOption({ index: 1 });
+  await page.getByRole("button", { name: "查看", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("只读");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "确认需求", exact: true }).click();
+  const frame = page.frameLocator('iframe[title="交互原型"]');
+  await expect(frame.locator("#claim")).toBeVisible();
+  await page.getByRole("button", { name: "点选修改" }).click();
+  await frame.locator("#claim").hover();
+  await frame.locator("#claim").click();
+  await expect(page.getByLabel("选区修改要求")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel("选区修改要求")).toHaveCount(0);
+  await page.getByLabel("原型预览尺寸").selectOption("mobile");
+  await expect(page.locator(".prototype-frame")).toHaveCSS("width", "390px");
+  await page.getByRole("button", { name: "专注成果" }).click();
+  await expect(page.locator(".conversation-pane")).toBeHidden();
+  await page.getByRole("button", { name: "显示对话" }).click();
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByLabel("搜索命令或需求").fill("知识库");
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("heading", { name: "知识库", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByLabel("搜索命令或需求").fill("面向每天登录");
+  await page.keyboard.press("Enter");
+  await expect(frame.locator("#claim")).toBeVisible();
+  for (const width of [1280, 900, 600, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(page.getByRole("button", { name: "点选修改" })).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await input.scrollIntoViewIfNeeded();
+    await expect(input).toBeVisible();
+    await input.fill("长对话内容".repeat(50));
+    await expect(page.getByRole("button", { name: "发送消息" })).toBeVisible();
+    await page.screenshot({ path: `test-results/responsive-${width}.png` });
+  }
+});
+
+test("knowledge source filters, empty search, version drawer and safe document preview", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const project = await createProject(page, "文档浏览验收");
+  for (let i = 1; i <= 4; i++)
+    await post(page, "/knowledge/text", {
+      projectId: project.id,
+      name: "非常长的项目业务规则文档名称用于检查换行与侧栏版本浏览".repeat(3),
+      content: `# 版本 ${i}\n规则正文 [K1]\n<script>window.pwned=true</script>\n\n| 规则 | 行为 |\n| --- | --- |\n| R-001 | 只读 |`,
+      state: "confirmed",
+    });
+  await page.getByRole("button", { name: "知识库", exact: true }).click();
+  await page
+    .getByPlaceholder("搜索文档或项目规则…")
+    .fill("完全不存在的关键词xyz");
+  await page.getByRole("button", { name: "搜索", exact: true }).click();
+  await expect(
+    page.getByText("没有找到匹配资料。试试其他关键词。"),
+  ).toBeVisible();
+  await expect(page.locator(".knowledge-item")).toHaveCount(0);
+  await page.getByPlaceholder("搜索文档或项目规则…").fill("");
+  await page.locator(".document-link").first().click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByLabel("知识文档版本").locator("option")).toHaveCount(
+    4,
+  );
+  await page.getByLabel("知识文档版本").selectOption({ index: 3 });
+  await expect(page.getByRole("dialog")).toContainText("版本 1");
+  await expect(page.getByRole("table")).toContainText("R-001");
+  expect(await page.evaluate(() => (window as any).pwned)).toBeUndefined();
+  await page.screenshot({ path: "test-results/knowledge-document.png" });
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "飞书", exact: true }).click();
+  await expect(page.locator(".knowledge-item")).toHaveCount(0);
+  await page.getByRole("button", { name: "全部资料", exact: true }).click();
+  await expect(page.locator(".knowledge-item")).toHaveCount(1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({ path: "test-results/knowledge-mobile.png" });
+});
+
+test("composer attaches explicit references and guards IME and blank submissions", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const project = await createProject(page, "附件与输入法验收");
+  await page.getByRole("button", { name: "新需求", exact: true }).click();
+  const input = page.getByLabel("需求对话输入");
+  await expect(page.getByRole("button", { name: "发送消息" })).toBeDisabled();
+  await input.fill("输入法测试");
+  await input.dispatchEvent("keydown", {
+    key: "Enter",
+    code: "Enter",
+    isComposing: true,
+  });
+  expect(
+    (await get(page, "/bootstrap")).requirements.filter(
+      (r: any) => r.projectId === project.id,
+    ),
+  ).toHaveLength(0);
+  await page.getByLabel("附加参考资料").setInputFiles({
+    name: "附件规则.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# 附件规则\n每天领取一次。"),
+  });
+  await input.press("Shift+Enter");
+  await expect(input).toHaveValue(/\n/);
+  await input.press("Enter");
+  await expect(page.locator(".markdown-document")).toBeVisible();
+  const requirement = (await get(page, "/bootstrap")).requirements.find(
+    (r: any) => r.projectId === project.id,
+  );
+  const workspace = await get(page, `/requirements/${requirement.id}`);
+  expect(
+    workspace.tasks
+      .at(-1)
+      .snapshot.contextPack.items.some((i: any) => i.title === "附件规则.md"),
+  ).toBe(true);
+  await page.locator(".execution-status summary").first().click();
+  await expect(page.locator(".execution-details")).toContainText("本轮参考了");
+  await page.getByText("Recall Debug · 开发调试").click();
+  await expect(page.locator(".execution-details pre")).toContainText(
+    "tokenBudget",
+  );
+});
+
+test("execution exposes running, stop, failure and successful retry without chat logs", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await createProject(page, "执行状态验收");
+  await page.getByRole("button", { name: "新需求", exact: true }).click();
+  const input = page.getByLabel("需求对话输入");
+  await input.fill("UI_TEST_SLOW");
+  await input.press("Enter");
+  await expect(
+    page.getByRole("button", { name: "停止生成", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".execution-status")).toContainText("正在处理");
+  await page.getByRole("button", { name: "停止生成", exact: true }).click();
+  await expect(page.locator(".execution-status")).toContainText("已停止");
+  await input.fill("UI_TEST_FAIL");
+  await input.press("Enter");
+  await expect(page.locator(".execution-status")).toContainText("执行失败");
+  await page.locator(".execution-status summary").first().click();
+  await expect(page.locator(".execution-details")).toContainText(
+    "TEST MOCK injected failure",
+  );
+  await page
+    .locator(".execution-status")
+    .getByRole("button", { name: "重试", exact: true })
+    .click();
+  await expect(page.locator(".markdown-document")).toContainText("需求说明");
+  await expect(page.locator(".execution-status")).toContainText("已完成");
+});
+
+test("long documents keep frozen citation previews and preserve drafts when the head changes", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const project = await createProject(page, "引用与并发草稿验收");
+  await post(page, "/knowledge/text", {
+    projectId: project.id,
+    name: "每日奖励事实",
+    content: "# 奖励规则\n每日奖励只可领取一次。",
+    state: "confirmed",
+  });
+  await page.getByRole("button", { name: "新需求", exact: true }).click();
+  const input = page.getByLabel("需求对话输入");
+  await input.fill("每日奖励规则");
+  await input.press("Enter");
+  await expect(page.locator(".markdown-document")).toBeVisible();
+  const requirement = (await get(page, "/bootstrap")).requirements.find(
+    (r: any) => r.projectId === project.id,
+  );
+  let workspace = await get(page, `/requirements/${requirement.id}`);
+  let base = workspace.requirement.heads.requirement;
+  const content =
+    "# 长文档验收\n" +
+    Array.from(
+      { length: 45 },
+      (_, i) =>
+        `\n## 第 ${i + 1} 节\n每日奖励只可领取一次 [K1]。\n${"规则说明。".repeat(30)}\n`,
+    ).join("");
+  for (let i = 0; i < 12; i++) {
+    const v = await post(page, `/requirements/${requirement.id}/versions`, {
+      kind: "requirement",
+      base,
+      content: content + `\n修订 ${i}`,
+      metadata: {},
+    });
+    base = v.id;
+  }
+  await expect(page.locator(".markdown-document")).toContainText("修订 11");
+  await expect(page.getByLabel("需求卡历史版本").locator("option")).toHaveCount(
+    13,
+  );
+  const citation = page.locator(".citation").first();
+  await citation.hover();
+  await expect(citation.getByRole("tooltip")).toContainText("每日奖励事实");
+  await expect(citation.getByRole("tooltip")).toContainText(
+    "每日奖励只可领取一次",
+  );
+  await citation.focus();
+  await expect(citation.getByRole("tooltip")).toBeVisible();
+  await page
+    .getByLabel("文档大纲")
+    .getByRole("button", { name: "第 45 节", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "第 45 节", exact: true }),
+  ).toBeInViewport();
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+  await page.getByLabel("需求卡编辑器").fill(content + "\n我的未保存草稿");
+  await post(page, `/requirements/${requirement.id}/versions`, {
+    kind: "requirement",
+    base,
+    content: "# 另一个正式版本",
+    metadata: {},
+  });
+  await expect(page.getByRole("alert")).toContainText("未保存草稿已保留");
+  await expect(page.getByLabel("需求卡编辑器")).toHaveValue(/我的未保存草稿/);
+  await expect(page.getByRole("button", { name: "保存修改" })).toBeDisabled();
+  await page.getByRole("button", { name: "放弃草稿，载入新版" }).click();
+  await expect(page.getByLabel("需求卡编辑器")).toHaveValue("# 另一个正式版本");
+});
+
+test("all projects and requirements expose confirmed deletion and recovery", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const project = await createProject(page, "删除入口验收");
+  const r = await post(page, "/requirements", {
+    projectId: project.id,
+    name: "待删需求",
+    mode: "full",
+  });
+  const keep = await post(page, "/requirements", {
+    projectId: project.id,
+    name: "保留需求",
+    mode: "full",
+  });
+  await page.reload();
+  await page
+    .getByRole("button", { name: "删除需求 待删需求", exact: true })
+    .click();
+  const confirm = page.getByRole("dialog", { name: "删除需求", exact: true });
+  await expect(
+    confirm.getByRole("button", { name: "移入回收站" }),
+  ).toBeDisabled();
+  await confirm.getByLabel("输入名称确认删除").fill("错误");
+  await expect(
+    confirm.getByRole("button", { name: "移入回收站" }),
+  ).toBeDisabled();
+  await confirm.getByRole("button", { name: "取消", exact: true }).click();
+  expect(
+    (await get(page, "/bootstrap")).requirements.some(
+      (x: any) => x.id === r.id,
+    ),
+  ).toBe(true);
+  await page
+    .getByRole("button", { name: "删除需求 待删需求", exact: true })
+    .click();
+  await page.getByLabel("输入名称确认删除").fill("待删需求");
+  await page.getByRole("button", { name: "移入回收站" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(
+    (await get(page, "/bootstrap")).requirements.some(
+      (x: any) => x.id === r.id,
+    ),
+  ).toBe(false);
+  expect(
+    (await get(page, "/bootstrap")).requirements.some(
+      (x: any) => x.id === keep.id,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "回收站", exact: true }).click();
+  await page
+    .locator(".resource-row")
+    .filter({ hasText: "待删需求" })
+    .getByRole("button", { name: "恢复", exact: true })
+    .click();
+  await page.getByRole("button", { name: "关闭管理面板" }).click();
+  await page
+    .locator(".requirement-list .req-row")
+    .filter({ hasText: "待删需求" })
+    .click();
+  await page.getByRole("button", { name: "删除当前需求", exact: true }).click();
+  await page.getByLabel("输入名称确认删除").fill("待删需求");
+  await page.getByRole("button", { name: "移入回收站" }).click();
+  await expect(
+    page.getByRole("heading", { name: "需求", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "管理项目", exact: true }).click();
+  await page
+    .locator(".resource-row")
+    .filter({ hasText: "删除入口验收" })
+    .getByRole("button", { name: "删除项目", exact: true })
+    .click();
+  await page.getByLabel("输入名称确认删除").fill("删除入口验收");
+  await page.getByRole("button", { name: "移入回收站" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "删除项目", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "关闭管理面板" }).click();
+  expect(
+    (await get(page, "/bootstrap")).projects.some(
+      (x: any) => x.id === project.id,
+    ),
+  ).toBe(false);
+  await page.getByRole("button", { name: "回收站", exact: true }).click();
+  await page
+    .locator(".resource-row")
+    .filter({ hasText: "删除入口验收" })
+    .getByRole("button", { name: "恢复", exact: true })
+    .click();
+  await expect(
+    page.locator(".resource-row").filter({ hasText: "待删需求" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "关闭管理面板" }).click();
+  await page.getByLabel("当前项目").selectOption(project.id);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    page.getByRole("button", { name: "管理项目", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "删除需求 保留需求", exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
 });

@@ -1,5 +1,23 @@
 # 独立项目验证记录
 
+## 2026-09-08 · Product Agent Workspace 重设计验收
+
+本节为当前重设计结果；下方保留的 2026-09-07 记录描述历史版本，不代表当前 UI 或服务状态。
+
+- 修改前：读取实际代码，启动隔离 Mock 工作台；真实 Chrome 跑原版 6 条 E2E，全部通过；观察并保存首屏、原型、PRD 截图后再实施。
+- `npm test`：55 passed，0 failed，0 skipped。包括真实本地 HTTP 安全与 macOS sandbox-exec 检查；模型调用是 SDK/Runtime Mock。
+- `npm run build`：TypeScript 与 Vite 通过；1586 modules，JS 259.92 kB（gzip 83.10 kB），CSS 38.87 kB（gzip 8.37 kB）。
+- `PLAYWRIGHT_CHROMIUM_EXECUTABLE='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' npm run test:e2e`：11 passed（16.7s）。运行真实本机 Chrome；默认 Playwright 下载浏览器不存在，因此使用项目现有 executable 环境变量支持，无需新增浏览器依赖。
+- `git diff --check`：通过，无输出。
+- 干净目录 `/private/tmp/game-prd-ux-clean-FICuo5`：不包含相邻仓库、真实 `.data`、`.env` 或 Git；复制项目源码和已经安装的依赖，55 项测试通过，最终前端构建通过。没有重新下载安装依赖。
+- 初次在外层执行沙箱内运行时，本地监听和嵌套 sandbox-exec 受限；在获准的测试运行环境中重跑通过，没有修改产品沙箱策略。
+
+浏览器覆盖原有确认、候选 Apply/Discard、历史 Restore、stale PRD、可选评审/终稿血缘、Show Me 新旧版本、Markdown/HTML 导出和飞书显式发布 Mock。新增覆盖就地 Inspector、候选对照、快捷应用、命令菜单、草稿跨面板保留/并发冲突、来源筛选/空搜索/知识版本、中文附件、IME、停止/失败重试、45 节文档与冻结引用预览。
+
+响应式实测宽度 1512、1280、900、600、390。检查横向溢出、独立滚动、成果操作与 Composer 可访问。截图已人工观察，精选证据见 `docs/ux/`，详细边界见 `docs/ux-redesign.md`。
+
+没有发起真实模型调用、真实飞书同步/发布或正式数据迁移。没有提交、推送或部署。未保存草稿仅在当前页面生命周期保留；完整 GFM 富文本和逐字符 diff 不在当前实现范围。
+
 日期：2026-09-07。以下区分真实本地执行、测试 Mock 与待配置服务。
 
 ## 本次更新：订阅登录、中央助手与永久删除
@@ -97,3 +115,11 @@
 - 使用本机 Chrome 的 `npm run test:e2e`：10 项通过，覆盖需求确认→原型→PRD→评审→终稿，以及阶段 Skill、单选风格、模板预览、配置刷新恢复。
 - 将源码、内置 defaults 和实际依赖复制到不含相邻仓库的临时目录，运行 standalone 和 workflow 验收：5 项通过。
 - 模型和发布验收使用 Mock。真实 Codex 多会话评审质量及在线澄清待实测，未提交、推送或部署。
+
+### 项目与需求删除、恢复验收（2026-09-08）
+
+- `npm test`：58 项通过，覆盖可信用户与名称确认、运行中任务阻止删除、关联版本与快照恢复、恢复冲突回滚，以及已删除需求随项目回收和清理。
+- `npm run build`：通过；`git diff --check`：通过。
+- 使用本机 Chrome 执行 `npm run test:e2e`：12 项通过，覆盖项目管理入口、列表和工作区删除、名称确认、取消、回收站恢复及手机宽度。
+- 独立目录 `/private/tmp/game-prd-delete-clean-ioXROn` 不包含相邻仓库、用户数据和凭证，58 项测试及构建通过。
+- 删除操作只在临时测试数据上执行，未删除用户项目或需求。模型与发布仍使用 Mock，真实在线服务待实测。

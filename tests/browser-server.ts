@@ -19,7 +19,18 @@ plugin.docs.set("feishu-rule", {
   url: "https://example.feishu.cn/docx/feishu-rule",
 });
 const { app } = await createApp(root, {
-  runtime: new MockRuntime(),
+  runtime: {
+    async run(input, host) {
+      const mock = new MockRuntime();
+      if (input.prompt.startsWith("UI_TEST_SLOW")) mock.delay = 30000;
+      if (
+        input.prompt.startsWith("UI_TEST_FAIL") &&
+        !input.prompt.includes("\n")
+      )
+        mock.fail = true;
+      return mock.run(input, host);
+    },
+  },
   plugin,
   test: true,
 });

@@ -29,7 +29,17 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
+import {
+  DeleteResourceDialog,
+  ResourceManager,
+} from "./components/ResourceManagement";
 import "./v2.css";
+import "./workspace.css";
+import { DocumentEditor, MarkdownDocument } from "./components/DocumentEditor";
+import { ExecutionStatus } from "./components/ExecutionStatus";
+import { useArtifactDraft } from "./components/useArtifactDraft";
+import { KnowledgeDocument } from "./components/KnowledgeDocument";
+import { CommandMenu } from "./components/CommandMenu";
 
 type View = "home" | "knowledge" | "settings" | "workspace";
 type Stage = "requirement" | "prototype" | "prd" | "review";
@@ -144,6 +154,7 @@ function withInspector(html: string) {
       Object.assign(box.style,{display:'block',left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
     }
     window.addEventListener('message',e=>{ if(e.data&&e.data.type==='forge-select-mode'){ enabled=!!e.data.enabled; if(!enabled) box.style.display='none'; document.documentElement.style.cursor=enabled?'crosshair':''; }});
+    document.addEventListener('keydown',e=>{if(e.key==='Escape'){enabled=false;box.style.display='none';parent.postMessage({type:'forge-inspect-cancel'},'*');}},true);
     document.addEventListener('mousemove',e=>mark(e.target),true);
     document.addEventListener('click',e=>{
       if(!enabled) return;
@@ -157,6 +168,21 @@ function withInspector(html: string) {
     ? html.replace(/<\/body>/i, inspector + "</body>")
     : html + inspector;
   return isolatedPreview(instrumented);
+}
+
+function versionReferences(version: any, workspace: any): any[] {
+  const visited = new Set<string>();
+  let current = version;
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    const pack = workspace.tasks.find((t: any) => t.id === current.taskId)
+      ?.snapshot?.contextPack;
+    if (pack) return pack.items;
+    current = workspace.versions.find(
+      (v: any) => v.id === (current.links?.restoredFrom || current.parentId),
+    );
+  }
+  return [];
 }
 
 function App() {
@@ -181,6 +207,23 @@ function App() {
   const [artifactOpen, setArtifactOpen] = useState(true);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [manager, setManager] = useState<"projects" | "trash" | null>(null);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === "k" &&
+        !e.isComposing
+      ) {
+        e.preventDefault();
+        setCommandOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
 
   const project = data?.projects?.find((p: any) => p.id === projectId);
   const reviewRoles = data?.settings?.defaults?.reviewRoles || DEFAULT_ROLES;
@@ -245,8 +288,12 @@ function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const run = async (fn: () => Promise<void>, ok = "已完成") => {
-    if (busy) return;
+  const run = async (
+    fn: () => Promise<void>,
+    ok = "已完成",
+    interrupt = false,
+  ) => {
+    if (busy && !interrupt) return;
     setBusy(true);
     setError("");
     try {
@@ -284,6 +331,38 @@ function App() {
     }, "项目已创建");
   };
 
+  const removeResource = async (target: any, confirmedName: string) => {
+    await api(
+      `/${target.kind === "project" ? "projects" : "requirements"}/${target.id}`,
+      "DELETE",
+      { confirmedName },
+    );
+    if (
+      (target.kind === "project" && target.id === projectId) ||
+      (target.kind === "requirement" && target.id === requirementId)
+    ) {
+      setRequirementId("");
+      setWorkspace(null);
+      setNewDraft(false);
+      setView("home");
+    }
+    await reload();
+    if (target.kind === "requirement") await loadKnowledge();
+    setToast("已移入回收站，可恢复");
+  };
+  const restoreResource = async (target: any) => {
+    await api(
+      target.kind === "project"
+        ? `/projects/${target.id}/restore`
+        : `/requirements/${target.id}/restore-deleted`,
+      "POST",
+      {},
+    );
+    await reload();
+    if (projectId) await loadKnowledge();
+    setToast("已恢复");
+  };
+
   if (!data)
     return (
       <div className="boot">
@@ -292,10 +371,62 @@ function App() {
     );
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${view === "workspace" ? "in-workspace" : ""}`}>
+      {manager && (
+        <ResourceManager
+          mode={manager}
+          data={data}
+          onClose={() => setManager(null)}
+          onDelete={setDeleteTarget}
+          onRestore={restoreResource}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteResourceDialog
+          target={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDelete={removeResource}
+        />
+      )}
+      {commandOpen && (
+        <CommandMenu
+          onClose={() => setCommandOpen(false)}
+          items={[
+            { id: "new", label: "新需求", hint: "开始对话", action: startNew },
+            ...(
+              [
+                ["home", "需求"],
+                ["knowledge", "知识库"],
+                ["settings", "设置"],
+              ] as const
+            ).map(([id, label]) => ({
+              id,
+              label,
+              hint: "跳转",
+              action: () => setView(id),
+            })),
+            ...data.requirements
+              .filter((r: any) => r.projectId === projectId)
+              .map((r: any) => ({
+                id: r.id,
+                label: r.name,
+                hint: r.stage,
+                action: () => enterRequirement(r.id),
+              })),
+          ]}
+        />
+      )}
       <aside className="rail">
         <button className="brand" onClick={() => setView("home")}>
           <Sparkles size={17} /> PRD
+        </button>
+        <button
+          aria-label="快速查找"
+          className="command-trigger ghost"
+          onClick={() => setCommandOpen(true)}
+        >
+          <Search size={14} /> <span>快速查找</span>
+          <kbd>⌘ K</kbd>
         </button>
         <nav>
           <NavButton
@@ -317,7 +448,47 @@ function App() {
             onClick={() => setView("settings")}
           />
         </nav>
+        <div className="recent-sessions">
+          <small>最近需求</small>
+          {data.requirements
+            .filter((r: any) => r.projectId === projectId)
+            .slice(-8)
+            .reverse()
+            .map((r: any) => (
+              <button
+                key={r.id}
+                className={
+                  requirementId === r.id && view === "workspace" ? "active" : ""
+                }
+                onClick={() => enterRequirement(r.id)}
+                title={r.name}
+              >
+                <MessageSquare size={13} />
+                <span>{r.name}</span>
+              </button>
+            ))}
+        </div>
         <div className="rail-bottom">
+          <div className="project-management-actions">
+            <button
+              className="icon-button"
+              aria-label="管理项目"
+              title="管理项目"
+              onClick={() => setManager("projects")}
+            >
+              <Settings size={15} />
+              <span>管理项目</span>
+            </button>
+            <button
+              className="icon-button"
+              aria-label="回收站"
+              title="回收站"
+              onClick={() => setManager("trash")}
+            >
+              <Trash2 size={15} />
+              <span>回收站</span>
+            </button>
+          </div>
           <label>当前项目</label>
           <select
             aria-label="当前项目"
@@ -341,14 +512,14 @@ function App() {
       </aside>
       <main className="main-shell">
         {error && (
-          <div className="global-error">
+          <div className="global-error" role="alert">
             <X size={14} />
             {error}
             <button onClick={() => setError("")}>关闭</button>
           </div>
         )}
         {toast && (
-          <div className="toast">
+          <div className="toast" role="status">
             <Check size={14} />
             {toast}
           </div>
@@ -358,6 +529,9 @@ function App() {
             data={data}
             projectId={projectId}
             onNew={startNew}
+            onDelete={(r: any) =>
+              setDeleteTarget({ ...r, kind: "requirement" })
+            }
             onOpen={enterRequirement}
           />
         )}
@@ -385,6 +559,11 @@ function App() {
         )}
         {view === "workspace" && (
           <Workspace
+            key={requirementId || "new"}
+            busy={busy}
+            onDelete={() =>
+              setDeleteTarget({ ...workspace.requirement, kind: "requirement" })
+            }
             project={project}
             projectId={projectId}
             requirementId={requirementId}
@@ -424,14 +603,19 @@ function App() {
 
 function NavButton({ active, icon, text, onClick }: any) {
   return (
-    <button className={active ? "nav active" : "nav"} onClick={onClick}>
+    <button
+      aria-label={text}
+      aria-current={active ? "page" : undefined}
+      className={active ? "nav active" : "nav"}
+      onClick={onClick}
+    >
       {icon}
       <span>{text}</span>
     </button>
   );
 }
 
-function Home({ data, projectId, onNew, onOpen }: any) {
+function Home({ data, projectId, onNew, onOpen, onDelete }: any) {
   const requirements = data.requirements.filter(
     (r: any) => r.projectId === projectId,
   );
@@ -456,18 +640,28 @@ function Home({ data, projectId, onNew, onOpen }: any) {
           </button>
         )}
         {requirements.map((r: any) => (
-          <button className="req-row" key={r.id} onClick={() => onOpen(r.id)}>
-            <div className="req-icon">
-              <FileText size={18} />
-            </div>
-            <div className="req-main">
-              <b>{r.name}</b>
-              <span>{r.stage}</span>
-            </div>
-            {r.stale && <span className="warn-chip">待同步</span>}
-            <time>{fmt(r.createdAt)}</time>
-            <ArrowRight size={16} />
-          </button>
+          <div className="requirement-row-wrap" key={r.id}>
+            <button className="req-row" onClick={() => onOpen(r.id)}>
+              <div className="req-icon">
+                <FileText size={18} />
+              </div>
+              <div className="req-main">
+                <b>{r.name}</b>
+                <span>{r.stage}</span>
+              </div>
+              {r.stale && <span className="warn-chip">待同步</span>}
+              <time>{fmt(r.createdAt)}</time>
+              <ArrowRight size={16} />
+            </button>
+            <button
+              className="icon-button delete-requirement"
+              aria-label={`删除需求 ${r.name}`}
+              title="删除需求"
+              onClick={() => onDelete(r)}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
         ))}
       </div>
     </section>
@@ -497,6 +691,8 @@ function Workspace(props: any) {
   const [input, setInput] = useState("");
   const [selection, setSelection] = useState<SelectionTarget | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
+  const [conversationOpen, setConversationOpen] = useState(true);
+  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [activeStage, setActiveStage] = useState<Stage>("requirement");
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -568,7 +764,20 @@ function Workspace(props: any) {
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const payload = event.data;
-      if (!payload || payload.type !== "forge-selection") return;
+      if (
+        event.source === iframeRef.current?.contentWindow &&
+        payload?.type === "forge-inspect-cancel"
+      ) {
+        setSelection(null);
+        setSelectionMode(false);
+        return;
+      }
+      if (
+        event.source !== iframeRef.current?.contentWindow ||
+        !payload ||
+        payload.type !== "forge-selection"
+      )
+        return;
       setSelection({
         selector: payload.selector,
         html: payload.html,
@@ -587,6 +796,59 @@ function Workspace(props: any) {
     );
   }, [selectionMode, prototypeVersion?.id, candidateTask?.id]);
 
+  useEffect(() => {
+    setSelection(null);
+    setSelectionMode(false);
+  }, [stage, prototypeVersion?.id, candidateTask?.id]);
+  useEffect(() => {
+    if (requirementVersion || prototypeVersion || prdVersion)
+      setArtifactOpen(true);
+  }, [requirementVersion?.id, prototypeVersion?.id, prdVersion?.id]);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.isComposing || (e.target as HTMLElement)?.closest?.("dialog[open]"))
+        return;
+      if (e.key === "Escape") {
+        setSelection(null);
+        setSelectionMode(false);
+      }
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key === "Enter" &&
+        candidateTask &&
+        !running &&
+        !props.busy &&
+        stage === "prototype" &&
+        showArtifact
+      ) {
+        e.preventDefault();
+        applyCandidate();
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  });
+  const stopTask = (id: string) =>
+    run(
+      async () => {
+        await api(`/tasks/${id}/cancel`, "POST", {});
+      },
+      "任务已停止",
+      true,
+    );
+  const uploadAttachments = async (rid: string) => {
+    const ids: string[] = [];
+    for (const file of attachmentFiles) {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("displayName", file.name);
+      form.append("projectId", projectId);
+      form.append("requirementId", rid);
+      const item = await api("/knowledge/upload", "POST", form);
+      ids.push(item.id);
+    }
+    return ids;
+  };
   const toggleMaterial = (knowledgeId: string, checked: boolean) =>
     run(
       async () => {
@@ -612,41 +874,46 @@ function Workspace(props: any) {
   ) => {
     const prompt = (override ?? input).trim();
     if (!prompt || running) return;
-    setInput("");
     if (!requirementId) {
       const r = await api("/requirements", "POST", {
         projectId,
         name: titleFromPrompt(prompt),
         mode: "full",
       });
-      onCreated(r.id);
+      const attachments = await uploadAttachments(r.id);
       await api(`/requirements/${r.id}/chat`, "POST", {
         prompt,
         stage: "requirement",
         action: "discuss",
-        referenceIds: [],
+        referenceIds: attachments,
         executor: "codex",
         model,
         reasoningEffort: effort,
       });
+      setInput("");
+      setAttachmentFiles([]);
+      onCreated(r.id);
       return;
     }
     const currentStage = stageOverride || stage;
     const targetContext = selection
       ? `\n\n当前选中的原型元素：\nselector: ${selection.selector || "未知"}\ntext: ${selection.text || ""}\nrect: ${JSON.stringify(selection.rect || {})}`
       : "";
+    const attachments = await uploadAttachments(requirementId);
     await api(`/requirements/${requirementId}/chat`, "POST", {
       prompt: prompt + targetContext,
       stage: currentStage,
       action,
       chatOnly,
-      referenceIds: linked,
+      referenceIds: [...linked, ...attachments],
       scope: "layout",
       selection: currentStage === "prototype" ? selection?.html || "" : "",
       executor: "codex",
       model,
       reasoningEffort: effort,
     });
+    setInput("");
+    setAttachmentFiles([]);
     setSelection(null);
     await onRefresh();
   };
@@ -720,13 +987,19 @@ function Workspace(props: any) {
           <div className="start-mark">
             <Sparkles size={22} />
           </div>
-          <h1>描述你想做什么</h1>
-          <p>我会先自动查找当前项目知识，再逐轮把需求问清楚。</p>
+          <p className="eyebrow">{project?.name} / 新需求</p>
+          <h1>今天要设计什么？</h1>
+          <p>
+            从一个想法开始。Codex
+            会结合项目资料，和你一起把它变成可执行的产品需求。
+          </p>
           <Composer
             value={input}
             onChange={setInput}
             onSend={() => run(() => send(), "")}
-            disabled={false}
+            disabled={props.busy}
+            files={attachmentFiles}
+            onFiles={setAttachmentFiles}
             model={model}
             effort={effort}
             onModelChange={setModel}
@@ -750,6 +1023,15 @@ function Workspace(props: any) {
           </div>
         </div>
         <div className="top-actions">
+          <button
+            className="icon-button"
+            aria-label="删除当前需求"
+            title="删除当前需求"
+            disabled={!req}
+            onClick={props.onDelete}
+          >
+            <Trash2 size={15} />
+          </button>
           <div className="artifact-nav" aria-label="成果阶段">
             {[
               ["requirement", "需求卡"],
@@ -840,12 +1122,38 @@ function Workspace(props: any) {
         </div>
       </header>
 
-      <div className={showArtifact ? "workbench split" : "workbench"}>
+      <div className="workspace-viewbar">
+        <span>
+          Codex ·{" "}
+          {stage === "requirement"
+            ? "一起确认产品决策"
+            : "讨论修改，成果独立保存"}
+        </span>
+        {showArtifact && (
+          <button
+            className="ghost"
+            onClick={() => setConversationOpen(!conversationOpen)}
+          >
+            {conversationOpen ? "专注成果" : "显示对话"}
+          </button>
+        )}
+      </div>
+      <div
+        className={`${showArtifact ? "workbench split" : "workbench"} ${!conversationOpen && showArtifact ? "artifact-focus" : ""}`}
+      >
         <div className="conversation-pane">
           <Conversation
             messages={workspace?.messages || []}
             tasks={workspace?.tasks || []}
             onRetry={retryTask}
+            questions={workspace?.questions || []}
+          />
+          <ExecutionStatus
+            key={lastTask?.id || "idle"}
+            task={running || lastTask}
+            candidate={candidateTask}
+            onRetry={retryTask}
+            onStop={stopTask}
           />
           {selection && (
             <div className="selection-chip">
@@ -862,7 +1170,10 @@ function Workspace(props: any) {
             value={input}
             onChange={setInput}
             onSend={() => run(() => send(), "")}
-            disabled={Boolean(running)}
+            disabled={Boolean(running) || props.busy}
+            onStop={running ? () => stopTask(running.id) : undefined}
+            files={attachmentFiles}
+            onFiles={setAttachmentFiles}
             model={model}
             effort={effort}
             fixedCount={linked.length}
@@ -875,6 +1186,7 @@ function Workspace(props: any) {
           <div className="artifact-pane">
             {stage === "requirement" && requirementVersion && (
               <RequirementArtifact
+                references={versionReferences(requirementVersion, workspace)}
                 version={requirementVersion}
                 confirmed={req.confirmed?.requirement === requirementVersion.id}
                 onConfirm={confirmRequirement}
@@ -889,6 +1201,17 @@ function Workspace(props: any) {
             )}
             {stage === "prototype" && prototypeVersion && (
               <PrototypeArtifact
+                selection={selection}
+                selectionInput={input}
+                onSelectionInput={setInput}
+                onSelectionSend={() =>
+                  run(() => send(undefined, "prototype"), "")
+                }
+                onClearSelection={() => {
+                  setSelection(null);
+                  setSelectionMode(false);
+                }}
+                disabled={Boolean(running) || props.busy}
                 version={prototypeVersion}
                 confirmed={req.confirmed?.prototype === prototypeVersion.id}
                 iframeRef={iframeRef}
@@ -929,6 +1252,24 @@ function Workspace(props: any) {
   );
 }
 
+function DraftConflict({ conflict, content, onLatest }: any) {
+  if (!conflict) return null;
+  return (
+    <div className="draft-conflict" role="alert">
+      <span>正式版本已更新，你的未保存草稿已保留。</span>
+      <button
+        className="ghost"
+        onClick={() => downloadText("未保存草稿.md", content, "text/markdown")}
+      >
+        导出草稿
+      </button>
+      <button className="ghost" onClick={onLatest}>
+        放弃草稿，载入新版
+      </button>
+    </div>
+  );
+}
+
 function StageChip({ stage }: { stage: Stage }) {
   const labels: Record<Stage, string> = {
     requirement: "需求澄清",
@@ -944,7 +1285,7 @@ function StageChip({ stage }: { stage: Stage }) {
   );
 }
 
-function Conversation({ messages, tasks, onRetry }: any) {
+function Conversation({ messages, tasks, onRetry, questions = [] }: any) {
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: "smooth" });
@@ -962,6 +1303,23 @@ function Conversation({ messages, tasks, onRetry }: any) {
           <span>项目资料由系统自动检索；能自己查到的事实不会反过来问你。</span>
         </div>
       )}
+      {questions.some((q: any) => q.status === "open") && (
+        <div className="decision-frontier">
+          <small>当前决策</small>
+          <b>
+            还有{" "}
+            {questions
+              .filter((q: any) => q.status === "open")
+              .reduce(
+                (n: number, q: any) =>
+                  n + (q.question.match(/❓\s*Q\d+/g)?.length || 1),
+                0,
+              )}{" "}
+            个问题需要你确认
+          </b>
+          <span>直接在下方回答，也可以补充你的判断。</span>
+        </div>
+      )}
       {messages.map((m: any) => (
         <div key={m.id} className={`message ${m.role}`}>
           {m.role === "assistant" && (
@@ -970,24 +1328,38 @@ function Conversation({ messages, tasks, onRetry }: any) {
             </div>
           )}
           <div className="bubble">
-            <pre>{m.content}</pre>
+            {/<html[\s>]/i.test(m.content) && m.role === "assistant" ? (
+              <div className="artifact-receipt">
+                <Monitor size={16} />
+                评审讲解内容已返回，请在独立成果中预览。
+              </div>
+            ) : tasks.some(
+                (t: any) =>
+                  t.prompt === m.content &&
+                  (t.snapshot?.action === "generate" || t.snapshot?.chatOnly),
+              ) ? (
+              <details className="operation-receipt">
+                <summary>
+                  已请求 ·{" "}
+                  {tasks.find((t: any) => t.prompt === m.content)?.snapshot
+                    ?.chatOnly
+                    ? "评审讲解"
+                    : "生成成果"}
+                </summary>
+                <pre>{m.content}</pre>
+              </details>
+            ) : (
+              <pre>{m.content.split("\n\n当前选中的原型元素：")[0]}</pre>
+            )}
+            {m.content.includes("\n\n当前选中的原型元素：") && (
+              <details className="operation-receipt">
+                <summary>附带原型选区</summary>
+                <pre>{m.content.split("\n\n当前选中的原型元素：")[1]}</pre>
+              </details>
+            )}
           </div>
         </div>
       ))}
-      {active && (
-        <div className="thinking">
-          <LoaderCircle size={14} className="spin" />
-          {active.events?.at(-1)?.text || "Codex 正在处理…"}
-        </div>
-      )}
-      {failed && (
-        <div className="task-failed">
-          <span>{failed.error || "任务执行失败，可以重试。"}</span>
-          <button className="ghost" onClick={() => onRetry(failed.id)}>
-            重试
-          </button>
-        </div>
-      )}
       <div ref={end} />
     </div>
   );
@@ -1003,6 +1375,9 @@ function Composer({
   fixedCount = 0,
   onModelChange,
   onEffortChange,
+  onStop,
+  files = [],
+  onFiles,
 }: any) {
   return (
     <div className="composer">
@@ -1010,16 +1385,46 @@ function Composer({
         aria-label="需求对话输入"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="输入需求、回答问题或继续修改…"
+        placeholder="描述你的产品需求，或告诉 Codex 想怎么修改…"
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            onSend();
+            if (!disabled && value.trim()) onSend();
           }
         }}
       />
+      {files.length > 0 && (
+        <div className="attachment-list">
+          {files.map((f: File, i: number) => (
+            <button
+              key={i}
+              onClick={() =>
+                onFiles(files.filter((_: File, n: number) => n !== i))
+              }
+              title="移除此附件"
+            >
+              {f.name} ×
+            </button>
+          ))}
+        </div>
+      )}
       <div className="composer-footer">
         <div className="composer-meta composer-controls">
+          {onFiles && (
+            <label className="attach-button" title="附加参考资料">
+              <Plus size={16} />
+              <input
+                type="file"
+                multiple
+                aria-label="附加参考资料"
+                disabled={disabled}
+                onChange={(e) => {
+                  onFiles([...files, ...Array.from(e.target.files || [])]);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          )}
           <input
             aria-label="本次模型"
             className="inline-model"
@@ -1039,23 +1444,35 @@ function Composer({
           </select>
           {fixedCount > 0 && <span>重点资料 {fixedCount}</span>}
         </div>
-        <button
-          className="send-button"
-          disabled={disabled || !value.trim()}
-          onClick={onSend}
-        >
-          {disabled ? (
-            <LoaderCircle className="spin" size={16} />
-          ) : (
-            <ArrowRight size={17} />
-          )}
-        </button>
+        {onStop ? (
+          <button
+            className="send-button"
+            aria-label="停止生成"
+            onClick={onStop}
+          >
+            <X size={16} />
+          </button>
+        ) : (
+          <button
+            aria-label="发送消息"
+            className="send-button"
+            disabled={disabled || !value.trim()}
+            onClick={onSend}
+          >
+            {disabled ? (
+              <LoaderCircle className="spin" size={16} />
+            ) : (
+              <ArrowRight size={17} />
+            )}
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
 function RequirementArtifact({
+  references,
   version,
   versions,
   onRestore,
@@ -1065,11 +1482,8 @@ function RequirementArtifact({
   onRefresh,
   run,
 }: any) {
-  const [content, setContent] = useState(version.content);
-  useEffect(() => {
-    setContent(version.content);
-  }, [version.id]);
-  const dirty = content !== version.content;
+  const { content, setContent, dirty, conflict, acceptLatest } =
+    useArtifactDraft(version);
   const save = () =>
     run(async () => {
       await api(`/requirements/${requirementId}/versions`, "POST", {
@@ -1083,11 +1497,11 @@ function RequirementArtifact({
   return (
     <ArtifactShell
       title="需求卡"
-      subtitle={`v${version.number}`}
+      subtitle={`v${version.number} · ${dirty ? "未保存" : confirmed ? "已确认" : "草稿 · 待你确认"}`}
       actions={
         <>
           {dirty && (
-            <button className="ghost" onClick={save}>
+            <button className="ghost" onClick={save} disabled={conflict}>
               保存修改
             </button>
           )}
@@ -1098,24 +1512,37 @@ function RequirementArtifact({
             onRestore={onRestore}
           />
           {!confirmed && (
-            <button className="primary" onClick={onConfirm}>
+            <button className="primary" onClick={onConfirm} disabled={dirty}>
               <Check size={15} /> 确认需求
             </button>
           )}
         </>
       }
     >
-      <textarea
-        aria-label="需求卡编辑器"
-        className="doc-editor"
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
+      <DraftConflict
+        conflict={conflict}
+        content={content}
+        onLatest={acceptLatest}
+      />
+      <DocumentEditor
+        label="需求卡编辑器"
+        content={content}
+        onChange={setContent}
+        dirty={dirty}
+        references={references}
+        previous={versions.find((v: any) => v.id === version.parentId)}
       />
     </ArtifactShell>
   );
 }
 
 function PrototypeArtifact({
+  selection,
+  selectionInput,
+  onSelectionInput,
+  onSelectionSend,
+  onClearSelection,
+  disabled,
   version,
   versions,
   onRestore,
@@ -1128,15 +1555,22 @@ function PrototypeArtifact({
   discardCandidate,
   onConfirm,
 }: any) {
-  const html = candidateTask?.candidate?.content || version.content;
+  const [candidatePreview, setCandidatePreview] = useState(true);
+  const [device, setDevice] = useState("desktop");
+  useEffect(() => setCandidatePreview(true), [candidateTask?.id]);
+  const html =
+    candidateTask && candidatePreview
+      ? candidateTask.candidate.content
+      : version.content;
   return (
     <ArtifactShell
       title="交互原型"
-      subtitle={`v${version.number}${candidateTask ? " · 修改候选" : ""}`}
+      subtitle={`v${version.number} · ${candidateTask ? "待审阅候选" : confirmed ? "已确认" : "草稿"}`}
       actions={
         <>
           <button
             className={selectionMode ? "tool active" : "tool"}
+            disabled={Boolean(candidateTask) || disabled}
             onClick={() => setSelectionMode(!selectionMode)}
           >
             <SquareMousePointer size={15} /> 点选修改
@@ -1167,11 +1601,47 @@ function PrototypeArtifact({
         </>
       }
     >
+      <div className="prototype-toolbar">
+        <div className="segmented">
+          <button
+            className={!selectionMode ? "active" : ""}
+            onClick={() => {
+              setSelectionMode(false);
+              onClearSelection();
+            }}
+          >
+            体验原型
+          </button>
+          <span>{selectionMode ? "正在点选元素" : "可直接操作预览"}</span>
+        </div>
+        <select
+          aria-label="原型预览尺寸"
+          value={device}
+          onChange={(e) => setDevice(e.target.value)}
+        >
+          <option value="desktop">自适应</option>
+          <option value="mobile">手机 · 390px</option>
+        </select>
+      </div>
       {candidateTask && (
         <div className="candidate-bar">
           <span>
-            <WandSparkles size={15} /> AI 修改候选，仅预览，正式原型还未改变。
+            <WandSparkles size={15} /> AI 修改候选，仅预览 · 应用后创建新版本。
           </span>
+          <div className="segmented">
+            <button
+              className={!candidatePreview ? "active" : ""}
+              onClick={() => setCandidatePreview(false)}
+            >
+              当前版本
+            </button>
+            <button
+              className={candidatePreview ? "active" : ""}
+              onClick={() => setCandidatePreview(true)}
+            >
+              候选效果
+            </button>
+          </div>
           <div>
             <button className="ghost" onClick={discardCandidate}>
               放弃
@@ -1183,17 +1653,69 @@ function PrototypeArtifact({
         </div>
       )}
       {selectionMode && (
-        <div className="selection-tip">
-          点击原型中的具体元素，再在左侧输入修改要求。
+        <div className="selection-tip">悬停查看范围，点击选择 · Esc 退出</div>
+      )}
+      {candidateTask && (
+        <p className="candidate-summary">{candidateTask.candidate.summary}</p>
+      )}
+      <div className={`prototype-canvas ${device}`}>
+        <iframe
+          ref={iframeRef}
+          className="prototype-frame"
+          title="交互原型"
+          srcDoc={withInspector(html)}
+          sandbox="allow-scripts"
+          onLoad={() =>
+            iframeRef.current?.contentWindow?.postMessage(
+              { type: "forge-select-mode", enabled: selectionMode },
+              "*",
+            )
+          }
+        />
+      </div>
+      {selection && (
+        <div className="contextual-composer">
+          <div>
+            <SquareMousePointer size={14} />
+            <b>{selection.selector}</b>
+            <span>
+              {Math.round(selection.rect?.width || 0)} ×{" "}
+              {Math.round(selection.rect?.height || 0)}
+            </span>
+            <button
+              aria-label="取消选区"
+              className="icon-button"
+              onClick={onClearSelection}
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <textarea
+            autoFocus
+            aria-label="选区修改要求"
+            placeholder="想怎么修改这个元素？"
+            value={selectionInput}
+            onChange={(e) => onSelectionInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (
+                e.key === "Enter" &&
+                !e.shiftKey &&
+                !e.nativeEvent.isComposing
+              ) {
+                e.preventDefault();
+                if (!disabled && selectionInput.trim()) onSelectionSend();
+              }
+            }}
+          />
+          <button
+            className="primary"
+            disabled={disabled || !selectionInput.trim()}
+            onClick={onSelectionSend}
+          >
+            生成修改候选 <ArrowRight size={14} />
+          </button>
         </div>
       )}
-      <iframe
-        ref={iframeRef}
-        className="prototype-frame"
-        title="交互原型"
-        srcDoc={withInspector(html)}
-        sandbox="allow-scripts"
-      />
     </ArtifactShell>
   );
 }
@@ -1212,24 +1734,25 @@ function PrdArtifact({
   onRefresh,
   run,
 }: any) {
-  const [content, setContent] = useState(prdVersion.content);
+  const { content, setContent, dirty, conflict, acceptLatest } =
+    useArtifactDraft(prdVersion);
   const [tab, setTab] = useState<"prd" | "review" | "showme">("prd");
   const [briefId, setBriefId] = useState("");
-  useEffect(() => {
-    setContent(prdVersion.content);
-  }, [prdVersion.id]);
+
   const req = workspace.requirement;
   const upstreamReady =
     req.mode !== "full" ||
     (req.heads.prototype && req.confirmed.prototype === req.heads.prototype) ||
     req.waiver?.requirementVersion === req.heads.requirement;
-  const dirty = content !== prdVersion.content;
+
   const resolutions = workspace.resolutions || [];
   const briefs: ReviewBrief[] = workspace.reviewBriefs || [];
   const currentBriefs = briefs.filter((x) => x.prdVersionId === prdVersion.id);
   const outdatedBriefs = briefs.filter((x) => x.prdVersionId !== prdVersion.id);
   const currentBrief =
-    currentBriefs.find((x) => x.id === briefId) || currentBriefs.at(-1);
+    briefs.find((x) => x.id === briefId) ||
+    currentBriefs.at(-1) ||
+    briefs.at(-1);
 
   const savePrd = () =>
     run(async () => {
@@ -1318,7 +1841,7 @@ function PrdArtifact({
       });
       if (!window.confirm("确认将当前 PRD 终稿发布到飞书？")) return;
       await api("/publish/confirm", "POST", { approvalId: approval.id });
-    }, "PRD 已发布到飞书");
+    }, "");
   };
   const published = (workspace.publications || []).some(
     (publication: any) =>
@@ -1327,26 +1850,33 @@ function PrdArtifact({
   );
 
   const generateShowme = async () => {
-    const before = workspace.messages.length;
     await run(async () => {
-      await api(`/requirements/${requirementId}/chat`, "POST", {
-        prompt: `基于当前 PRD 生成一份用于产品需求评审会议的自包含 HTML。它不是研发 PRD 的复制版，而是帮助人快速理解需求的讲解材料。参考 Show Me 原则：只保留最能讲清楚的视图；优先使用流程结构、状态对比、关键规则、异常边界、评审关注点；视觉简洁、信息密度高、桌面端可直接演示。必须只返回完整 <!doctype html>... </html>，不要 Markdown 代码围栏。当前 PRD：\n${prdVersion.content}`,
-        stage: "prd",
-        action: "discuss",
-        chatOnly: true,
-        referenceIds: [],
-        executor: "codex",
-        model,
-        reasoningEffort: effort,
-      });
-      for (let i = 0; i < 90; i++) {
+      const generatedTask = await api(
+        `/requirements/${requirementId}/chat`,
+        "POST",
+        {
+          prompt: `基于当前 PRD 生成一份用于产品需求评审会议的自包含 HTML。它不是研发 PRD 的复制版，而是帮助人快速理解需求的讲解材料。参考 Show Me 原则：只保留最能讲清楚的视图；优先使用流程结构、状态对比、关键规则、异常边界、评审关注点；视觉简洁、信息密度高、桌面端可直接演示。必须只返回完整 <!doctype html>... </html>，不要 Markdown 代码围栏。当前 PRD：\n${prdVersion.content}`,
+          stage: "prd",
+          action: "discuss",
+          chatOnly: true,
+          referenceIds: [],
+          executor: "codex",
+          model,
+          reasoningEffort: effort,
+        },
+      );
+      for (let i = 0; i < 900; i++) {
         await new Promise((resolve) => setTimeout(resolve, 700));
         const next = await api(`/requirements/${requirementId}`);
+        const task = next.tasks?.find((t: any) => t.id === generatedTask.id);
+        if (task?.status === "cancelled") return;
         const latest = (next.messages || [])
-          .slice(before)
           .reverse()
           .find(
-            (m: any) => m.role === "assistant" && /<html[\s>]/i.test(m.content),
+            (m: any) =>
+              m.taskId === generatedTask.id &&
+              m.role === "assistant" &&
+              /<html[\s>]/i.test(m.content),
           );
         if (latest) {
           const match =
@@ -1363,100 +1893,114 @@ function PrdArtifact({
             return;
           }
         }
-        if (
-          !next.tasks?.some((t: any) =>
-            ["queued", "running"].includes(t.status),
-          )
-        )
-          break;
+        if (task && !["queued", "running"].includes(task.status)) break;
       }
       throw new Error("评审讲解 HTML 未生成，请重试");
-    }, "评审讲解已生成");
+    }, "");
   };
 
   return (
     <ArtifactShell
-      title="PRD"
-      subtitle={`v${prdVersion.number}${req.stale ? " · 待同步" : ""}`}
-      actions={
-        <>
+      title={
+        tab === "showme" ? "评审讲解" : tab === "review" ? "评审收件箱" : "PRD"
+      }
+      subtitle={
+        tab === "showme"
+          ? `独立 HTML 成果 · ${currentBrief ? `v${currentBrief.number}` : "尚未生成"}`
+          : tab === "review"
+            ? `独立评审 · ${reviewVersion ? `v${reviewVersion.number}` : "可选"}`
+            : `v${prdVersion.number} · ${req.stale ? "待同步" : req.finalVersion === prdVersion.id ? "终稿" : "草稿"}`
+      }
+      navigation={
+        <div className="artifact-tabs" aria-label="文档成果">
           <button
-            className="ghost"
-            onClick={() =>
-              downloadText(
-                `prd-v${prdVersion.number}.md`,
-                prdVersion.content,
-                "text/markdown",
-              )
-            }
+            className={tab === "prd" ? "active" : ""}
+            onClick={() => setTab("prd")}
           >
-            <Download size={15} /> Markdown
+            PRD
           </button>
-          <VersionHistory
-            label="PRD"
-            current={prdVersion}
-            versions={versions}
-            onRestore={onRestore}
-          />
-          {req.finalVersion !== prdVersion.id && !req.stale && (
-            <button className="primary" onClick={finalize}>
-              <Check size={15} />
-              {reviewVersion ? "确认终稿" : "跳过评审并确认终稿"}
-            </button>
-          )}
-          {req.stale && (
+          <button
+            className={tab === "review" ? "active" : ""}
+            onClick={() => setTab("review")}
+          >
+            AI 评审
+            {reviewVersion
+              ? ` · ${reviewVersion.metadata?.issues?.length || 0}`
+              : ""}
+          </button>
+          <button
+            className={tab === "showme" ? "active" : ""}
+            onClick={() => setTab("showme")}
+          >
+            评审讲解
+          </button>
+        </div>
+      }
+      actions={
+        tab === "prd" && (
+          <>
             <button
               className="ghost"
-              onClick={syncPrd}
-              disabled={!upstreamReady}
-              title={upstreamReady ? "" : "请先返回原型并确认当前正式原型"}
+              onClick={() =>
+                downloadText(
+                  `prd-v${prdVersion.number}.md`,
+                  prdVersion.content,
+                  "text/markdown",
+                )
+              }
             >
-              <RefreshCcw size={15} /> 重新同步
+              <Download size={15} /> Markdown
             </button>
-          )}
-          {req.finalVersion === prdVersion.id && !req.stale && (
-            <button className="ghost" onClick={publishFeishu}>
-              <ExternalLink size={15} />
-              {published ? "飞书已交付" : "飞书交付"}
-            </button>
-          )}
-        </>
+            <VersionHistory
+              label="PRD"
+              current={prdVersion}
+              versions={versions}
+              onRestore={onRestore}
+            />
+            {req.finalVersion !== prdVersion.id && !req.stale && (
+              <button className="primary" onClick={finalize} disabled={dirty}>
+                <Check size={15} />
+                {reviewVersion ? "确认终稿" : "跳过评审并确认终稿"}
+              </button>
+            )}
+            {req.stale && (
+              <button
+                className="ghost"
+                onClick={syncPrd}
+                disabled={!upstreamReady}
+                title={upstreamReady ? "" : "请先返回原型并确认当前正式原型"}
+              >
+                <RefreshCcw size={15} /> 重新同步
+              </button>
+            )}
+            {req.finalVersion === prdVersion.id && !req.stale && (
+              <button className="ghost" onClick={publishFeishu}>
+                <ExternalLink size={15} />
+                {published ? "飞书已交付" : "飞书交付"}
+              </button>
+            )}
+          </>
+        )
       }
     >
-      <div className="artifact-tabs">
-        <button
-          className={tab === "prd" ? "active" : ""}
-          onClick={() => setTab("prd")}
-        >
-          PRD
-        </button>
-        <button
-          className={tab === "review" ? "active" : ""}
-          onClick={() => setTab("review")}
-        >
-          AI 评审
-          {reviewVersion
-            ? ` · ${reviewVersion.metadata?.issues?.length || 0}`
-            : ""}
-        </button>
-        <button
-          className={tab === "showme" ? "active" : ""}
-          onClick={() => setTab("showme")}
-        >
-          评审讲解
-        </button>
-      </div>
       {tab === "prd" && (
         <div className="prd-edit-wrap">
-          <textarea
-            aria-label="PRD 文档编辑器"
-            className="doc-editor prd-editor"
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
+          <DraftConflict
+            conflict={conflict}
+            content={content}
+            onLatest={acceptLatest}
+          />
+          <DocumentEditor
+            label="PRD 文档编辑器"
+            content={content}
+            onChange={setContent}
+            dirty={dirty}
+            references={versionReferences(prdVersion, workspace)}
+            previous={versions.find((v: any) => v.id === prdVersion.parentId)}
           />
           {dirty && (
             <div className="floating-save">
-              <button className="primary" onClick={savePrd}>
+              <button className="primary" onClick={savePrd} disabled={conflict}>
                 保存 PRD
               </button>
             </div>
@@ -1470,13 +2014,44 @@ function PrdArtifact({
               <Bot size={24} />
               <h3>多 Agent 评审是可选的</h3>
               <p>默认从多个独立视角检查当前 PRD。角色可以在设置中全局修改。</p>
-              <button className="primary" onClick={startReview}>
+              <button
+                className="primary"
+                onClick={startReview}
+                disabled={
+                  dirty ||
+                  workspace.tasks.some((t: any) =>
+                    ["queued", "running"].includes(t.status),
+                  )
+                }
+              >
                 <Sparkles size={15} /> 开始评审
               </button>
             </div>
           )}
           {reviewVersion && (
             <>
+              <div className="review-counts">
+                {[
+                  ["critical", "严重"],
+                  ["major", "主要"],
+                  ["minor", "轻微"],
+                ].map(([key, label]) => (
+                  <span key={key}>
+                    {
+                      reviewVersion.metadata.issues.filter(
+                        (i: any) => i.severity === key,
+                      ).length
+                    }{" "}
+                    {label}
+                  </span>
+                ))}
+                <span>
+                  基于 PRD{" "}
+                  {reviewVersion.links?.prd === prdVersion.id
+                    ? "当前版本"
+                    : "历史版本 · 保留裁决"}
+                </span>
+              </div>
               <div className="review-summary">
                 {reviewVersion.metadata?.summary}
               </div>
@@ -1489,10 +2064,18 @@ function PrdArtifact({
                   .at(-1);
                 return (
                   <div className="issue-card" key={issue.id}>
+                    <small className="issue-role">
+                      {issue.sourceRole ||
+                        issue.description.match(/^【([^】]+)】/)?.[1] ||
+                        "独立评审"}{" "}
+                      · {issue.id}
+                    </small>
                     <div className="issue-head">
                       <b>{issue.description}</b>
                       <span className={`severity ${issue.severity}`}>
-                        {issue.severity}
+                        {{ critical: "严重", major: "主要", minor: "轻微" }[
+                          issue.severity as string
+                        ] || issue.severity}
                       </span>
                     </div>
                     <p>{issue.suggestion}</p>
@@ -1512,7 +2095,23 @@ function PrdArtifact({
                   </div>
                 );
               })}
-              <button className="primary apply-review" onClick={applyAccepted}>
+              <button
+                className="primary apply-review"
+                onClick={applyAccepted}
+                disabled={
+                  dirty ||
+                  !reviewVersion.metadata.issues.some(
+                    (issue: any) =>
+                      resolutions
+                        .filter(
+                          (r: any) =>
+                            r.reviewId === reviewVersion.id &&
+                            r.issueId === issue.id,
+                        )
+                        .at(-1)?.decision === "采纳",
+                  )
+                }
+              >
                 应用已采纳建议
               </button>
             </>
@@ -1521,7 +2120,7 @@ function PrdArtifact({
       )}
       {tab === "showme" && (
         <div className="showme-panel">
-          {outdatedBriefs.length > 0 && currentBriefs.length === 0 && (
+          {currentBrief && currentBrief.prdVersionId !== prdVersion.id && (
             <div className="stale-brief-note">
               现有 {outdatedBriefs.length} 个讲解版本基于旧 PRD，请为当前 PRD
               重新生成。
@@ -1546,13 +2145,17 @@ function PrdArtifact({
                   value={currentBrief.id}
                   onChange={(e) => setBriefId(e.target.value)}
                 >
-                  {currentBriefs.map((brief) => (
+                  {briefs.map((brief) => (
                     <option key={brief.id} value={brief.id}>
                       讲解 v{brief.number} · {fmt(brief.createdAt)}
                     </option>
                   ))}
                 </select>
-                <span>基于 PRD v{prdVersion.number}</span>
+                <span>
+                  基于 PRD v
+                  {versions.find((v: any) => v.id === currentBrief.prdVersionId)
+                    ?.number || "—"}
+                </span>
                 <button
                   className="ghost"
                   onClick={() =>
@@ -1570,6 +2173,7 @@ function PrdArtifact({
                 </button>
               </div>
               <iframe
+                title="评审讲解预览"
                 className="showme-frame"
                 srcDoc={isolatedPreview(currentBrief.html)}
                 sandbox="allow-scripts"
@@ -1582,9 +2186,16 @@ function PrdArtifact({
   );
 }
 
-function ArtifactShell({ title, subtitle, actions, children }: any) {
+function ArtifactShell({
+  title,
+  subtitle,
+  actions,
+  children,
+  navigation,
+}: any) {
   return (
     <div className="artifact-shell">
+      {navigation}
       <header className="artifact-header">
         <div>
           <h3>{title}</h3>
@@ -1599,12 +2210,19 @@ function ArtifactShell({ title, subtitle, actions, children }: any) {
 
 function VersionHistory({ label, current, versions, onRestore }: any) {
   const [selected, setSelected] = useState("");
+  const [preview, setPreview] = useState(false);
   const historical = [...(versions || [])]
     .filter((version: any) => version.id !== current.id)
     .reverse();
   if (!historical.length) return null;
   return (
     <div className="version-history">
+      {preview && selected && (
+        <HistoryPreview
+          version={historical.find((v: any) => v.id === selected)}
+          onClose={() => setPreview(false)}
+        />
+      )}
       <select
         aria-label={`${label}历史版本`}
         value={selected}
@@ -1620,6 +2238,13 @@ function VersionHistory({ label, current, versions, onRestore }: any) {
       <button
         className="ghost"
         disabled={!selected}
+        onClick={() => setPreview(true)}
+      >
+        查看
+      </button>
+      <button
+        className="ghost"
+        disabled={!selected}
         onClick={() => {
           onRestore(selected);
           setSelected("");
@@ -1628,6 +2253,44 @@ function VersionHistory({ label, current, versions, onRestore }: any) {
         回退
       </button>
     </div>
+  );
+}
+
+function HistoryPreview({ version, onClose }: any) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const prior = document.activeElement as HTMLElement;
+    dialog.current?.showModal();
+    return () => {
+      dialog.current?.close();
+      prior?.focus();
+    };
+  }, []);
+  if (!version) return null;
+  return (
+    <dialog ref={dialog} className="history-dialog" onCancel={onClose}>
+      <header>
+        <b>
+          历史版本 v{version.number} ·{" "}
+          {version.actor === "agent" ? "AI 生成" : "用户保存"}
+        </b>
+        <span>只读 · 恢复会创建新版本</span>
+        <button className="ghost" onClick={onClose}>
+          关闭
+        </button>
+      </header>
+      {version.kind === "prototype" ? (
+        <iframe
+          title="历史原型预览"
+          sandbox="allow-scripts"
+          srcDoc={isolatedPreview(version.content)}
+        />
+      ) : (
+        <div className="history-document">
+          <MarkdownDocument content={version.content} />
+        </div>
+      )}
+    </dialog>
   );
 }
 
@@ -1642,14 +2305,30 @@ function KnowledgeView({
   const [sources, setSources] = useState<Source[]>(knowledge.sources || []);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<any[]>([]);
+  const [searched, setSearched] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [selectedDocument, setSelectedDocument] = useState<any>(null);
+  const [syncing, setSyncing] = useState("");
+  useEffect(() => {
+    setSourceFilter("all");
+    setSelectedDocument(null);
+    setResults([]);
+    setQuery("");
+    setSearched(false);
+  }, [projectId]);
 
   useEffect(() => {
     setSources(knowledge.sources || []);
   }, [projectId, JSON.stringify(knowledge.sources || [])]);
 
   const syncSourceCore = async (source: Source, list = sources) => {
-    await api(`/knowledge/sources/${source.id}/sync`, "POST", {});
-    await onChanged();
+    setSyncing(source.id);
+    try {
+      await api(`/knowledge/sources/${source.id}/sync`, "POST", {});
+      await onChanged();
+    } finally {
+      setSyncing("");
+    }
     return list;
   };
 
@@ -1701,7 +2380,11 @@ function KnowledgeView({
   };
 
   const doSearch = async () => {
-    if (!query.trim()) return setResults([]);
+    if (!query.trim()) {
+      setSearched(false);
+      return setResults([]);
+    }
+    setSearched(true);
     setResults(
       await api(
         `/knowledge/search?projectId=${encodeURIComponent(projectId)}&q=${encodeURIComponent(query)}`,
@@ -1725,6 +2408,15 @@ function KnowledgeView({
 
   return (
     <section className="page knowledge-page">
+      {selectedDocument && (
+        <KnowledgeDocument
+          item={selectedDocument}
+          versions={knowledge.items
+            .filter((v: any) => v.documentId === selectedDocument.documentId)
+            .sort((a: any, b: any) => b.version - a.version)}
+          onClose={() => setSelectedDocument(null)}
+        />
+      )}
       <header className="page-header">
         <div>
           <p className="eyebrow">{project?.name}</p>
@@ -1746,11 +2438,30 @@ function KnowledgeView({
             <b>资料源</b>
             <span>{sources.length}</span>
           </div>
+          <div className="source-filters">
+            {[
+              ["all", "全部资料"],
+              ["directory", "本地"],
+              ["feishu", "飞书"],
+              ["upload", "上传"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                className={sourceFilter === id ? "active" : ""}
+                onClick={() => setSourceFilter(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {sources.length === 0 && (
             <div className="mini-empty">还没有关联资料源。</div>
           )}
           {sources.map((source) => (
-            <div className="source-card" key={source.id}>
+            <div
+              className={`source-card ${sourceFilter === source.id ? "selected" : ""}`}
+              key={source.id}
+            >
               <div className="source-icon">
                 {source.type === "directory" ? (
                   <Folder size={17} />
@@ -1759,11 +2470,28 @@ function KnowledgeView({
                 )}
               </div>
               <div className="source-main">
-                <b>{source.name}</b>
+                <button
+                  className="source-select"
+                  onClick={() => setSourceFilter(source.id)}
+                  title={source.name}
+                >
+                  {source.name}
+                </button>
                 <span title={source.locator}>{source.locator}</span>
                 <small>
-                  最后同步 {fmt(source.lastSyncedAt)} ·{" "}
-                  {source.lastSyncStatus || "idle"}
+                  {source.type === "upload"
+                    ? "上传资料 · 无需同步"
+                    : `最后同步 ${fmt(source.lastSyncedAt)}`}{" "}
+                  ·{" "}
+                  {syncing === source.id
+                    ? "同步中"
+                    : source.lastSyncStatus === "failed"
+                      ? "同步失败"
+                      : source.lastSyncStatus === "success"
+                        ? "已同步"
+                        : source.type === "upload"
+                          ? "已导入"
+                          : "待同步"}
                   {source.documentCount !== undefined
                     ? ` · ${source.documentCount} 个文档`
                     : ""}
@@ -1778,6 +2506,7 @@ function KnowledgeView({
                   <button
                     className="icon-button"
                     title="立即同步"
+                    disabled={Boolean(syncing)}
                     onClick={() => syncSource(source)}
                   >
                     <RefreshCcw size={14} />
@@ -1809,25 +2538,65 @@ function KnowledgeView({
             <Search size={16} />
             <input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && doSearch()}
-              placeholder="测试 AI 能否找到某条项目规则…"
+              onChange={(e) => {
+                setQuery(e.target.value);
+                if (!e.target.value.trim()) {
+                  setSearched(false);
+                  setResults([]);
+                }
+              }}
+              onKeyDown={(e) =>
+                e.key === "Enter" &&
+                !e.nativeEvent.isComposing &&
+                run(doSearch, "")
+              }
+              placeholder="搜索文档或项目规则…"
             />
-            <button onClick={doSearch}>搜索</button>
+            <button onClick={() => run(doSearch, "")}>搜索</button>
           </div>
           <div className="knowledge-items">
-            {(results.length ? results : latestItems).map((item: any) => (
-              <KnowledgeItem
-                key={item.id}
-                item={item}
-                matched={results.length > 0}
-                versions={(knowledge.items || [])
-                  .filter((x: any) => x.documentId === item.documentId)
-                  .sort(
-                    (a: any, b: any) => (b.version || 0) - (a.version || 0),
-                  )}
-              />
-            ))}
+            <div className="section-title">
+              <b>
+                {sourceFilter === "all"
+                  ? "全部文档"
+                  : sources.find((s) => s.id === sourceFilter)?.name ||
+                    "来源文档"}
+              </b>
+              <span>{searched ? "搜索结果" : "当前版本"}</span>
+            </div>
+            {searched && !results.length && (
+              <div className="mini-empty">
+                没有找到匹配资料。试试其他关键词。
+              </div>
+            )}
+            {(searched ? results : latestItems)
+              .filter(
+                (item: any) =>
+                  sourceFilter === "all" ||
+                  item.sourceId === sourceFilter ||
+                  sources.find((s) => s.id === item.sourceId)?.type ===
+                    sourceFilter ||
+                  (sourceFilter === "upload" &&
+                    String(item.source).startsWith("upload:")),
+              )
+              .map((item: any) => (
+                <KnowledgeItem
+                  key={item.id}
+                  item={item}
+                  onOpen={() =>
+                    setSelectedDocument(
+                      knowledge.items.find((v: any) => v.id === item.id) ||
+                        item,
+                    )
+                  }
+                  matched={results.length > 0}
+                  versions={(knowledge.items || [])
+                    .filter((x: any) => x.documentId === item.documentId)
+                    .sort(
+                      (a: any, b: any) => (b.version || 0) - (a.version || 0),
+                    )}
+                />
+              ))}
           </div>
         </div>
       </div>
@@ -1835,11 +2604,13 @@ function KnowledgeView({
   );
 }
 
-function KnowledgeItem({ item, matched = false, versions = [] }: any) {
+function KnowledgeItem({ item, matched = false, versions = [], onOpen }: any) {
   return (
     <div className="knowledge-item">
       <div>
-        <b>{item.name}</b>
+        <button className="document-link" onClick={onOpen} title={item.name}>
+          {item.name}
+        </button>
         {/^https:\/\//.test(item.sourceUrl || "") ? (
           <span>
             来源：
@@ -1853,37 +2624,25 @@ function KnowledgeItem({ item, matched = false, versions = [] }: any) {
       </div>
       <div className="knowledge-meta">
         <span>v{item.version}</span>
-        <span>{item.versionStatus || item.status}</span>
+        <span>
+          {item.documentStatus === "deprecated"
+            ? "已停用"
+            : item.status === "failed"
+              ? "解析失败"
+              : item.versionStatus === "current"
+                ? "可用"
+                : "历史版本"}
+        </span>
         {item.sourceRevision !== undefined && (
           <span>revision {item.sourceRevision}</span>
         )}
-        {matched && item.score !== undefined && (
-          <span>相关度 {Math.round(item.score)}</span>
-        )}
-      </div>
-      <div className="knowledge-meta">
-        {item.capturedAt && <span>捕获 {fmt(item.capturedAt)}</span>}
-        {item.hash && <span>hash {String(item.hash).slice(0, 10)}</span>}
       </div>
       {matched && item.matchedChunks?.[0]?.text && (
         <p>{item.matchedChunks[0].text.slice(0, 260)}</p>
       )}
-      {versions.length > 1 && (
-        <details>
-          <summary>{versions.length} 个版本</summary>
-          {versions.map((version: any) => (
-            <div className="knowledge-meta" key={version.id}>
-              <span>v{version.version}</span>
-              <span>{version.versionStatus}</span>
-              {version.sourceRevision !== undefined && (
-                <span>revision {version.sourceRevision}</span>
-              )}
-              <span>{fmt(version.capturedAt || version.createdAt)}</span>
-              <span>hash {String(version.hash || "").slice(0, 10)}</span>
-            </div>
-          ))}
-        </details>
-      )}
+      <button className="document-details-link" onClick={onOpen}>
+        {versions.length} 个版本 · 查看文档
+      </button>
     </div>
   );
 }

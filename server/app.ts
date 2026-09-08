@@ -135,14 +135,18 @@ export async function createApp(
     csrf: token,
     projects: s.all("project"),
     projectTrash: s.all("projectTrash").map(({ entries, ...x }) => x),
+    requirementTrash: s.all("requirementTrash").map(({ entries, ...x }) => x),
     draftRequirementIds: [
       ...s.all("requirement").map((x) => x.id),
+      ...s.all("requirementTrash").map((x) => x.id),
       ...s
         .all("projectTrash")
         .filter((x) => !x.purging)
         .flatMap((x) =>
           x.entries
-            .filter((e: any) => e.kind === "requirement")
+            .filter((e: any) =>
+              ["requirement", "requirementTrash"].includes(e.kind),
+            )
             .map((e: any) => e.data.id),
         ),
     ],
@@ -238,6 +242,24 @@ export async function createApp(
       .parse(r.body);
     return domain.requirement(b.projectId, b.name, b.mode);
   });
+  route("delete", "/api/requirements/:id", (r) => {
+    const body = z
+      .object({ confirmedName: text.max(120) })
+      .strict()
+      .parse(r.body);
+    check(!delivery.locks.has(r.params.id), "需求正在发布，请等待结束", 409);
+    check(
+      ![...tasks.running.keys()].some(
+        (id) => s.get("task", id).requirementId === r.params.id,
+      ),
+      "任务正在停止，请稍后删除",
+      409,
+    );
+    return domain.deleteRequirement(r.params.id, body.confirmedName);
+  });
+  route("post", "/api/requirements/:id/restore-deleted", (r) =>
+    domain.restoreRequirement(r.params.id),
+  );
   route("get", "/api/requirements/:id", (r) => {
     const req = s.get("requirement", r.params.id);
     return {
@@ -712,19 +734,24 @@ export async function createApp(
     async (req, res, next) => {
       try {
         check(req.file, "请选择资料");
+        // Browser multipart filenames may be decoded as Latin-1. The explicit
+        // UTF-8 form field is presentation metadata, never a filesystem path.
+        const displayName = req.body.displayName
+          ? text.max(500).parse(req.body.displayName).split(/[\\/]/).at(-1)!
+          : req.file.originalname;
         res.json(
           await knowledge.import(
             id.parse(req.body.projectId),
             req.body.requirementId || null,
-            req.file.originalname,
+            displayName,
             req.file.buffer,
-            "upload:" + req.file.originalname,
+            "upload:" + displayName,
             req.body.module || "general",
             req.body.state || "pending",
             req.body.folderId || null,
             {
               sourceType: "upload",
-              externalId: req.file.originalname,
+              externalId: displayName,
               syncedAt: now(),
             },
           ),
@@ -851,6 +878,13 @@ export async function createApp(
   route("delete", "/api/requirements/:id/materials/:knowledgeId", (r) =>
     tree.unlink(r.params.id, r.params.knowledgeId),
   );
+  // Read-only presentation of a specific immutable document version. Lists
+  // intentionally omit parsed text; opening a drawer reads just this version.
+  route("get", "/api/knowledge/:id/document", (r) => {
+    const version = s.get("knowledge", id.parse(r.params.id));
+    check(!version.deletedAt, "资料已删除", 404);
+    return { id: version.id, text: version.text || "", status: version.status };
+  });
   app.get("/api/knowledge/:id/file", async (req, res, next) => {
     try {
       res

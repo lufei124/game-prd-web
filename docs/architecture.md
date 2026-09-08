@@ -358,3 +358,19 @@ npm run build
 ## 10. MVP 后续边界
 
 MVP 不包含 User/Team/Workspace Scope、Vector/Embedding、Recall LLM Subagent、自动 Learning、Knowledge/Code Graph、AST、Git/Notion/Web Connector 或语义冲突裁决。V2 可在 RecallTrace 证明词法召回不足后评估 User opt-in、Candidate Learning（必须用户确认）、Recall Quality 和可选 Vector；V3 再评估团队域、连接器、图谱与自动治理。
+
+## 11. Workspace 前端呈现层（2026-09-08）
+
+导航与工作区继续调用既有版本/确认/候选/评审/发布接口。新增 `web/components` 中的 DocumentEditor、ExecutionStatus、CommandMenu、KnowledgeDocument 与 useArtifactDraft；`web/workspace.css` 提供统一呈现层。UI 草稿缓存不参与 Domain 状态、不授予确认或覆盖权限，冲突时阻止保存并保留用户文本。
+
+知识列表继续省略正文。`GET /api/knowledge/:id/document` 只读取指定 immutable knowledge version 的 id/text/status，拒绝已删除资料，不写入状态。引用通过成果 task 的冻结 ContextPack 寻找 knowledgeId，人工修订沿父版本查找；绝不把历史引用替换为当前知识版本。上传新增可选 displayName 字段，保留 UTF-8 文件显示名，移除路径部分；原文件仍使用宿主生成 ID 存储。
+
+Inspect 的 postMessage 只接收当前原型 iframe，Escape 可以从 iframe 传回。预览副本继续使用 CSP 与 allow-scripts sandbox；历史预览同样隔离。Markdown 不执行 HTML。所有生成/确认/Apply/Discard/终稿/飞书审批状态沿用现有逻辑。完整交互结构见 `docs/ux-redesign.md`。
+
+## 12. 项目与需求回收站
+
+项目删除继续使用既有 `projectTrash` 快照。新增 `requirementTrash` 记录（存储于现有 entities，无 schema 或数据迁移）：用户提供完整名称后，事务移入 requirement 及 requirementId 归属的全部实体。版本、确认、任务冻结快照、需求知识版本与文档保持原 ID；原文件和检索分块暂时保留，正常查询不返回已移出的知识实体。
+
+`DELETE /api/requirements/:id` 校验名称、实际运行任务与发布锁；Domain 同时拒绝 Agent、queued/running/waiting 任务及 writing 发布。`POST /api/requirements/:id/restore-deleted` 要求父项目存在，逐项检查 ID 冲突，事务恢复且不覆盖现有实体。bootstrap 仅暴露回收站摘要，不返回内部快照。
+
+项目删除包含 requirementTrash；恢复项目不自动恢复此前单独删除的需求。既有项目永久清理递归纳入这些需求的附件、任务目录和交付文件，避免漏清理。前端删除入口只移入回收站，不发起永久清理。

@@ -170,6 +170,76 @@ export class Domain {
     });
   }
 
+  deleteRequirement(id: string, confirmedName: string, actor = "user") {
+    check(actor === "user", "只有用户可以删除需求", 403);
+    return this.s.tx(() => {
+      const requirement = this.s.get<Requirement>("requirement", id);
+      check(
+        confirmedName === requirement.name,
+        "请输入完整需求名称确认删除",
+        409,
+      );
+      check(
+        !this.s
+          .all("task")
+          .some(
+            (t) =>
+              t.requirementId === id &&
+              ["queued", "running", "waiting"].includes(t.status),
+          ),
+        "需求有未结束的任务，请先停止任务",
+        409,
+      );
+      check(
+        !this.s
+          .all("publication")
+          .some((p) => p.requirementId === id && p.status === "writing"),
+        "需求正在发布，请等待结束",
+        409,
+      );
+      const entries = (
+        this.s.db.prepare("SELECT kind,data FROM entities").all() as any[]
+      )
+        .map((x) => ({ kind: x.kind, data: JSON.parse(x.data) }))
+        .filter(
+          (x) =>
+            (x.kind === "requirement" && x.data.id === id) ||
+            x.data.requirementId === id,
+        );
+      this.s.put("requirementTrash", {
+        id,
+        projectId: requirement.projectId,
+        name: requirement.name,
+        deletedAt: now(),
+        entries,
+      });
+      for (const entry of entries) this.s.remove(entry.kind, entry.data.id);
+      this.s.audit(actor, "requirement.delete", id, {
+        entries: entries.length,
+      });
+      return { id, deleted: true };
+    });
+  }
+
+  restoreRequirement(id: string, actor = "user") {
+    check(actor === "user", "只有用户可以恢复需求", 403);
+    return this.s.tx(() => {
+      const trash = this.s.get("requirementTrash", id);
+      check(this.s.maybe("project", trash.projectId), "请先恢复所属项目", 409);
+      for (const entry of trash.entries) {
+        check(
+          !this.s.maybe(entry.kind, entry.data.id),
+          "恢复目标已存在，不能覆盖",
+          409,
+        );
+        this.s.put(entry.kind, entry.data);
+      }
+      this.s.remove("requirementTrash", id);
+      this.s.audit(actor, "requirement.restore", id);
+      return this.s.get("requirement", id);
+    });
+  }
+
   requirement(
     projectId: string,
     name: string,
