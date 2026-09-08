@@ -20,6 +20,7 @@ export interface RemoteDoc {
   content: string;
   revision: number;
   url?: string;
+  updatedAt?: string;
 }
 export interface DeliveryPlugin {
   attach?(
@@ -160,6 +161,7 @@ export class LarkPlugin implements DeliveryPlugin {
           ? Number(revision)
           : -1,
       url: d.url || d.document_url,
+      updatedAt: d.updated_at || d.updatedAt || d.update_time,
     };
   }
   async payload(content: string) {

@@ -5,13 +5,14 @@ import { Domain } from "./domain.ts";
 // command to change workflow, grant confirmation, or select hidden extensions.
 export function conversationOptions(s: Store, requirementId: string, body: any) {
   const r = s.get("requirement", requirementId);
-  // Retain replay compatibility for old read-only chat requests/snapshots.
+  // New read-only chat tasks still use the conversation ContextPack. Historical
+  // snapshots remain replayable through the executor's legacy fallback.
   if (body.chatOnly)
     return {
       ...body,
       kind: "requirement",
       executor: "codex",
-      conversation: false,
+      conversation: true,
       chatOnly: true,
     };
   const stage = body.stage || new Domain(s).conversationStage(r);

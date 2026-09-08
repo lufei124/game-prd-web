@@ -36,11 +36,11 @@ npm run dev
 
 ### 2. 自动检索项目知识
 
-用户发送需求后，宿主自动使用当前项目知识进行检索，不要求用户先选择文件。
+用户发送需求后，宿主通过 Context Orchestrator 自动判断是否需要 Recall，不要求用户先选择文件。检索结果只是候选，只有经过 Scope、FTS5、rerank、冻结版本读取、去重、版本过滤和 token budget 的 `ContextPack` 才会进入 Main Codex。
 
-检索采用文档分块 + 标题/文件名/正文关键词混合评分，返回最相关文档及命中片段。同一资料源重复同步且内容未变化时不会创建重复版本。
+检索在导入时持久化 heading-aware Chunk，并用英文/数字词与中文词/双字片段写入 SQLite FTS5；运行时先取候选 Chunk，再按标题、heading、完整短语、重点资料和文档多样性排序。同一资料源重复同步且内容未变化时不会创建重复版本。
 
-需求也可以固定「重点资料」。重点资料始终进入本需求后续任务快照，同时仍保留全项目自动检索。
+需求也可以固定「重点资料」。重点资料保证被 Context Builder 考虑，但长文只读取相关片段，不会整篇强塞。每个新对话任务冻结独立 ContextPack；资料源后续同步不会改变旧任务上下文。
 
 ### 3. 需求澄清
 
@@ -139,6 +139,8 @@ PRD 后可以额外生成「需求评审讲解」。
 讲解版本保存在 SQLite，并记录所依据的 PRD 版本；PRD 更新后，界面会提示旧讲解已过期，需要为当前 PRD 重新生成。
 
 ## 知识库
+
+知识追踪层级为 `KnowledgeSource → KnowledgeDocument → knowledge(DocumentVersion) → KnowledgeChunk → FTS5`。旧 `knowledge` ID 和历史任务快照保持不变；知识页可查看来源、逻辑文档、当前/历史版本、飞书 revision/URL 与同步时间。
 
 ### 本地文件夹
 
@@ -253,6 +255,7 @@ lark-cli auth check --scope "docx:document:readonly docx:document:create docx:do
 ## 数据与安全
 
 - SQLite 是业务状态源。
+- Rule 由代码确定性加载，Skill 继续使用 Codex native discovery，只有 Knowledge 进入 Retrieval；本版本不实现自动 Learning。
 - 原文件保存在 `.data/files/`。
 - 版本、确认、任务、评审裁决和发布记录独立保存。
 - HTTP 仅接受 loopback Host、同站 Cookie、Origin 与 CSRF。

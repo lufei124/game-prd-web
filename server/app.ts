@@ -146,13 +146,11 @@ export async function createApp(
             .map((e: any) => e.data.id),
         ),
     ],
-    requirements: s
-      .all("requirement")
-      .map((r) => ({
-        ...r,
-        stage: domain.stage(r),
-        conversationStage: domain.conversationStage(r),
-      })),
+    requirements: s.all("requirement").map((r) => ({
+      ...r,
+      stage: domain.stage(r),
+      conversationStage: domain.conversationStage(r),
+    })),
     extensions: extensions.list().map((e) => ({
       ...e,
       release: {
@@ -255,8 +253,20 @@ export async function createApp(
         .map(({ snapshot, ...t }) => ({
           ...t,
           snapshot: {
-            releases: snapshot.releases.map(({ files, ...x }: any) => x),
-            knowledge: snapshot.knowledge.map(({ text, ...x }: any) => x),
+            releases: (snapshot.releases || []).map(
+              ({ files, ...x }: any) => x,
+            ),
+            knowledge: (snapshot.knowledge || []).map(
+              ({ text, ...x }: any) => x,
+            ),
+            contextPack: snapshot.contextPack
+              ? {
+                  ...snapshot.contextPack,
+                  items: snapshot.contextPack.items.map(
+                    ({ content, ...item }: any) => item,
+                  ),
+                }
+              : undefined,
             scope: snapshot.scope,
             conversation: !!snapshot.conversation,
             chatOnly: !!snapshot.chatOnly,
@@ -538,13 +548,154 @@ export async function createApp(
     return {
       items: s
         .all("knowledge")
-        .filter((x) => x.projectId === projectId && !x.deletedAt),
+        .filter((x) => x.projectId === projectId && !x.deletedAt)
+        .map((x) => {
+          const document = x.documentId
+            ? s.maybe("knowledgeDocument", x.documentId)
+            : undefined;
+          return {
+            ...x,
+            text: undefined,
+            externalId: document?.externalId,
+            documentStatus: document?.status,
+          };
+        }),
       folders: s
         .all("knowledgeFolder")
         .filter((x) => x.projectId === projectId),
       links: s.all("knowledgeLink").filter((x) => x.projectId === projectId),
+      sources: s
+        .all("knowledgeSource")
+        .filter((x) => x.projectId === projectId && !x.removedAt)
+        .map((x) => ({
+          ...x,
+          documentCount: s
+            .all("knowledgeDocument")
+            .filter((d) => d.sourceId === x.id).length,
+        })),
+      documents: s
+        .all("knowledgeDocument")
+        .filter((x) => x.projectId === projectId),
       conflicts: knowledge.conflicts(projectId),
     };
+  });
+  route("post", "/api/knowledge/sources", async (r) => {
+    const body = z
+      .object({
+        projectId: id,
+        type: z.enum(["directory", "feishu"]),
+        name: text.max(150),
+        locator: text.max(2000),
+      })
+      .strict()
+      .parse(r.body);
+    s.get("project", body.projectId);
+    let locator = body.locator;
+    if (body.type === "directory") {
+      locator = await realpath(locator);
+      const settings = s.get("settings", "system");
+      s.put("settings", {
+        ...settings,
+        authorizedRoots: [
+          ...new Set([...(settings.authorizedRoots || []), locator]),
+        ],
+      });
+    }
+    return knowledge.sources.ensure(body.projectId, { ...body, locator });
+  });
+  route("delete", "/api/knowledge/sources/:id", (r) => {
+    const source = s.get("knowledgeSource", r.params.id);
+    s.put("knowledgeSource", { ...source, removedAt: now(), updatedAt: now() });
+    s.audit("user", "knowledgeSource.unlink", source.id);
+    return { removed: true };
+  });
+  route("post", "/api/knowledge/sources/:id/sync", async (r) => {
+    const source = s.get("knowledgeSource", r.params.id);
+    check(!source.removedAt, "资料源已解除", 409);
+    check(source.type !== "upload", "项目上传资料无需同步", 409);
+    const results: any[] = [];
+    try {
+      if (source.type === "directory") {
+        const files = await directoryFiles(
+          source.locator,
+          s.get("settings", "system").authorizedRoots,
+        );
+        for (const [relativePath, data] of Object.entries(files)) {
+          let folderId: string | null = null;
+          for (const segment of relativePath.split("/").slice(0, -1)) {
+            const existing = s
+              .all("knowledgeFolder")
+              .find(
+                (x) =>
+                  x.projectId === source.projectId &&
+                  x.parentId === folderId &&
+                  x.name === segment,
+              );
+            folderId =
+              existing?.id ||
+              new KnowledgeTree(s).create(source.projectId, segment, folderId)
+                .id;
+          }
+          results.push(
+            await knowledge.import(
+              source.projectId,
+              folderId,
+              relativePath,
+              Buffer.from(data, "base64"),
+              `directory:${source.locator}/${relativePath}`,
+              "general",
+              "pending",
+              null,
+              {
+                sourceId: source.id,
+                sourceType: "directory",
+                locator: source.locator,
+                externalId: relativePath.replaceAll("\\", "/"),
+                syncedAt: now(),
+              },
+            ),
+          );
+        }
+      } else {
+        const remote = await registry.get("feishu").fetch(source.locator);
+        results.push(
+          await knowledge.import(
+            source.projectId,
+            null,
+            `${source.name || remote.id}.md`,
+            Buffer.from(remote.content),
+            `feishu:${remote.id}`,
+            "general",
+            "pending",
+            null,
+            {
+              sourceId: source.id,
+              sourceType: "feishu",
+              locator: source.locator,
+              externalId: remote.id,
+              sourceRevision: remote.revision,
+              sourceUpdatedAt: remote.updatedAt,
+              sourceUrl: remote.url,
+              syncedAt: now(),
+            },
+          ),
+        );
+      }
+      knowledge.sources.synced(
+        source.id,
+        "success",
+        "",
+        results.filter((x) => !x.unchanged).length,
+      );
+      return results;
+    } catch (error) {
+      knowledge.sources.synced(
+        source.id,
+        "failed",
+        redact(error instanceof Error ? error.message : "同步失败"),
+      );
+      throw error;
+    }
   });
   app.post(
     "/api/knowledge/upload",
@@ -562,6 +713,11 @@ export async function createApp(
             req.body.module || "general",
             req.body.state || "pending",
             req.body.folderId || null,
+            {
+              sourceType: "upload",
+              externalId: req.file.originalname,
+              syncedAt: now(),
+            },
           ),
         );
       } catch (e) {
@@ -592,6 +748,11 @@ export async function createApp(
       b.module,
       b.state,
       b.folderId,
+      {
+        sourceType: "upload",
+        externalId: b.name.endsWith(".md") ? b.name : b.name + ".md",
+        syncedAt: now(),
+      },
     );
   });
   route("post", "/api/knowledge/directory", async (r) => {
@@ -627,6 +788,12 @@ export async function createApp(
           r.body.module || "general",
           "pending",
           folderId,
+          {
+            sourceType: "directory",
+            locator: r.body.path,
+            externalId: name.replaceAll("\\", "/"),
+            syncedAt: now(),
+          },
         ),
       );
     }
@@ -643,6 +810,15 @@ export async function createApp(
       r.body.module || "general",
       "pending",
       r.body.folderId || null,
+      {
+        sourceType: "feishu",
+        locator: text.parse(r.body.doc),
+        externalId: remote.id,
+        sourceRevision: remote.revision,
+        sourceUpdatedAt: remote.updatedAt,
+        sourceUrl: remote.url,
+        syncedAt: now(),
+      },
     );
   });
   const tree = new KnowledgeTree(s);
@@ -683,6 +859,10 @@ export async function createApp(
       text.parse(r.query.q),
     ),
   );
+  route("get", "/api/tasks/:id/recall-trace", (r) => {
+    s.get("task", r.params.id);
+    return s.all("recallTrace").find((x) => x.taskId === r.params.id) || null;
+  });
   route("post", "/api/extensions/simple", (r) => {
     const b = z
       .object({

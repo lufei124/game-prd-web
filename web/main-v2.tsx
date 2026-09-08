@@ -36,12 +36,14 @@ type Stage = "requirement" | "prototype" | "prd" | "review";
 type Role = { id: string; name: string; focus: string };
 type Source = {
   id: string;
-  type: "directory" | "feishu";
-  location: string;
+  type: "directory" | "feishu" | "upload";
+  locator: string;
   name: string;
-  lastSynced?: string;
+  lastSyncedAt?: string;
+  lastSyncStatus?: "idle" | "success" | "failed";
+  lastSyncError?: string;
+  documentCount?: number;
   lastChanges?: number;
-  error?: string;
 };
 type SelectionTarget = {
   selector?: string;
@@ -512,21 +514,35 @@ function Workspace(props: any) {
     ["queued", "running"].includes(t.status),
   );
   const lastTask = workspace?.tasks?.at(-1);
-  const referenced = lastTask?.snapshot?.knowledge || [];
-  const linked = (knowledge.links || [])
-    .filter((l: any) => l.requirementId === requirementId)
-    .map((l: any) => l.knowledgeId);
+  const referenced =
+    lastTask?.snapshot?.contextPack?.items ||
+    lastTask?.snapshot?.knowledge ||
+    [];
+  const linkedDocuments = new Set(
+    (knowledge.links || [])
+      .filter((l: any) => l.requirementId === requirementId)
+      .map(
+        (l: any) =>
+          l.documentId ||
+          (knowledge.items || []).find((x: any) => x.id === l.knowledgeId)
+            ?.documentId,
+      ),
+  );
   const projectKnowledge = useMemo(() => {
     const latest = new Map<string, any>();
     for (const item of knowledge.items || []) {
       if (item.requirementId) continue;
-      const key = `${item.source}:${item.name}`;
+      if (item.versionStatus !== "current") continue;
+      const key = item.documentId || `${item.source}:${item.name}`;
       const current = latest.get(key);
       if (!current || (current.version || 0) < (item.version || 0))
         latest.set(key, item);
     }
     return [...latest.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [knowledge.items]);
+  const linked = projectKnowledge
+    .filter((item: any) => linkedDocuments.has(item.documentId))
+    .map((item: any) => item.id);
   const candidateTask = [...(workspace?.tasks || [])]
     .reverse()
     .find(
@@ -783,11 +799,30 @@ function Workspace(props: any) {
               </summary>
               <div>
                 {referenced.map((x: any) => (
-                  <span key={x.id}>
-                    {x.name}
-                    {x.matchedChunks?.[0]?.heading
-                      ? ` · ${x.matchedChunks[0].heading}`
+                  <span key={x.citationId || x.id}>
+                    <b>
+                      {x.citationId ? `${x.citationId} ` : ""}
+                      {x.title || x.name}
+                    </b>
+                    {x.sourceType ? ` · ${x.sourceType}` : ""}
+                    {x.sourceRevision !== undefined
+                      ? ` · revision ${x.sourceRevision}`
                       : ""}
+                    {x.heading ? ` · ${x.heading}` : ""}
+                    {x.capturedAt ? ` · ${fmt(x.capturedAt)}` : ""}
+                    {/^https:\/\//.test(x.sourceUrl || "") ? (
+                      <>
+                        {" "}
+                        ·{" "}
+                        <a href={x.sourceUrl} target="_blank" rel="noreferrer">
+                          查看来源
+                        </a>
+                      </>
+                    ) : x.sourcePath ? (
+                      ` · ${x.sourcePath}`
+                    ) : (
+                      ""
+                    )}
                   </span>
                 ))}
               </div>
@@ -1604,58 +1639,18 @@ function KnowledgeView({
   onChanged,
   run,
 }: any) {
-  const [sources, setSources] = useState<Source[]>(
-    project?.defaults?.knowledgeSources || [],
-  );
+  const [sources, setSources] = useState<Source[]>(knowledge.sources || []);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<any[]>([]);
 
   useEffect(() => {
-    setSources(project?.defaults?.knowledgeSources || []);
-  }, [projectId, JSON.stringify(project?.defaults?.knowledgeSources || [])]);
-
-  const persist = async (next: Source[]) => {
-    setSources(next);
-    await api(`/projects/${projectId}`, "PATCH", {
-      defaults: {
-        ...(project?.defaults || {}),
-        knowledgeSources: next,
-      },
-    });
-  };
+    setSources(knowledge.sources || []);
+  }, [projectId, JSON.stringify(knowledge.sources || [])]);
 
   const syncSourceCore = async (source: Source, list = sources) => {
-    let result: any;
-    if (source.type === "directory") {
-      const roots = [
-        ...new Set([...(settings.authorizedRoots || []), source.location]),
-      ];
-      await api("/settings", "PATCH", { authorizedRoots: roots });
-      result = await api("/knowledge/directory", "POST", {
-        projectId,
-        path: source.location,
-      });
-    } else {
-      result = await api("/knowledge/feishu", "POST", {
-        projectId,
-        doc: source.location,
-        name: source.name,
-      });
-    }
-    const rows = Array.isArray(result) ? result : [result];
-    const changes = rows.filter((x: any) => !x.unchanged).length;
-    const next = list.map((x) =>
-      x.id === source.id
-        ? {
-            ...x,
-            lastSynced: new Date().toISOString(),
-            lastChanges: changes,
-            error: "",
-          }
-        : x,
-    );
-    await persist(next);
-    return next;
+    await api(`/knowledge/sources/${source.id}/sync`, "POST", {});
+    await onChanged();
+    return list;
   };
 
   const syncSource = async (source: Source, list = sources) =>
@@ -1669,6 +1664,7 @@ function KnowledgeView({
       void (async () => {
         let current = sources;
         for (const source of sources) {
+          if (source.type === "upload") continue;
           try {
             current = await syncSourceCore(source, current);
           } catch {
@@ -1681,26 +1677,26 @@ function KnowledgeView({
     return () => clearInterval(timer);
   }, [
     projectId,
-    sources.map((x) => `${x.id}:${x.type}:${x.location}`).join("|"),
+    sources.map((x) => `${x.id}:${x.type}:${x.locator}`).join("|"),
   ]);
 
-  const addSource = async (type: Source["type"]) => {
+  const addSource = async (type: "directory" | "feishu") => {
     const location = window.prompt(
       type === "directory" ? "本地文件夹绝对路径" : "飞书文档链接或文档 ID",
     );
     if (!location?.trim()) return;
-    const next: Source = {
-      id: crypto.randomUUID(),
+    const next: Source = await api("/knowledge/sources", "POST", {
+      projectId,
       type,
-      location: location.trim(),
+      locator: location.trim(),
       name:
         type === "directory"
           ? location.trim().split(/[\\/]/).filter(Boolean).at(-1) ||
             "本地文件夹"
           : "飞书文档",
-    };
-    const list = [...sources, next];
-    await persist(list);
+    });
+    const list = [...sources.filter((x) => x.id !== next.id), next];
+    setSources(list);
     await syncSource(next, list);
   };
 
@@ -1715,7 +1711,10 @@ function KnowledgeView({
   const latestItems = useMemo(() => {
     const map = new Map<string, any>();
     for (const item of knowledge.items || []) {
-      const key = `${item.requirementId || "project"}:${item.source}:${item.name}`;
+      if (item.versionStatus && item.versionStatus !== "current") continue;
+      const key =
+        item.documentId ||
+        `${item.requirementId || "project"}:${item.source}:${item.name}`;
       if (!map.has(key) || (map.get(key).version || 0) < (item.version || 0))
         map.set(key, item);
     }
@@ -1761,32 +1760,47 @@ function KnowledgeView({
               </div>
               <div className="source-main">
                 <b>{source.name}</b>
-                <span title={source.location}>{source.location}</span>
+                <span title={source.locator}>{source.locator}</span>
                 <small>
-                  最后同步 {fmt(source.lastSynced)}
+                  最后同步 {fmt(source.lastSyncedAt)} ·{" "}
+                  {source.lastSyncStatus || "idle"}
+                  {source.documentCount !== undefined
+                    ? ` · ${source.documentCount} 个文档`
+                    : ""}
                   {source.lastChanges !== undefined
                     ? ` · ${source.lastChanges} 项变化`
                     : ""}
                 </small>
+                {source.lastSyncError && <small>{source.lastSyncError}</small>}
               </div>
-              <button
-                className="icon-button"
-                title="立即同步"
-                onClick={() => syncSource(source)}
-              >
-                <RefreshCcw size={14} />
-              </button>
-              <button
-                className="icon-button"
-                title="解除资料源，不删除已索引资料"
-                onClick={() =>
-                  run(async () => {
-                    await persist(sources.filter((x) => x.id !== source.id));
-                  }, "资料源已解除")
-                }
-              >
-                <Trash2 size={14} />
-              </button>
+              {source.type !== "upload" && (
+                <>
+                  <button
+                    className="icon-button"
+                    title="立即同步"
+                    onClick={() => syncSource(source)}
+                  >
+                    <RefreshCcw size={14} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    title="解除资料源，不删除已索引资料"
+                    onClick={() =>
+                      run(async () => {
+                        await api(
+                          `/knowledge/sources/${source.id}`,
+                          "DELETE",
+                          {},
+                        );
+                        setSources(sources.filter((x) => x.id !== source.id));
+                        await onChanged();
+                      }, "资料源已解除")
+                    }
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </>
+              )}
             </div>
           ))}
         </div>
@@ -1807,6 +1821,11 @@ function KnowledgeView({
                 key={item.id}
                 item={item}
                 matched={results.length > 0}
+                versions={(knowledge.items || [])
+                  .filter((x: any) => x.documentId === item.documentId)
+                  .sort(
+                    (a: any, b: any) => (b.version || 0) - (a.version || 0),
+                  )}
               />
             ))}
           </div>
@@ -1816,22 +1835,54 @@ function KnowledgeView({
   );
 }
 
-function KnowledgeItem({ item, matched = false }: any) {
+function KnowledgeItem({ item, matched = false, versions = [] }: any) {
   return (
     <div className="knowledge-item">
       <div>
         <b>{item.name}</b>
-        <span>{item.source}</span>
+        {/^https:\/\//.test(item.sourceUrl || "") ? (
+          <span>
+            来源：
+            <a href={item.sourceUrl} target="_blank" rel="noreferrer">
+              查看原文
+            </a>
+          </span>
+        ) : (
+          <span>来源：{item.externalId || item.source}</span>
+        )}
       </div>
       <div className="knowledge-meta">
         <span>v{item.version}</span>
-        <span>{item.status}</span>
+        <span>{item.versionStatus || item.status}</span>
+        {item.sourceRevision !== undefined && (
+          <span>revision {item.sourceRevision}</span>
+        )}
         {matched && item.score !== undefined && (
           <span>相关度 {Math.round(item.score)}</span>
         )}
       </div>
+      <div className="knowledge-meta">
+        {item.capturedAt && <span>捕获 {fmt(item.capturedAt)}</span>}
+        {item.hash && <span>hash {String(item.hash).slice(0, 10)}</span>}
+      </div>
       {matched && item.matchedChunks?.[0]?.text && (
         <p>{item.matchedChunks[0].text.slice(0, 260)}</p>
+      )}
+      {versions.length > 1 && (
+        <details>
+          <summary>{versions.length} 个版本</summary>
+          {versions.map((version: any) => (
+            <div className="knowledge-meta" key={version.id}>
+              <span>v{version.version}</span>
+              <span>{version.versionStatus}</span>
+              {version.sourceRevision !== undefined && (
+                <span>revision {version.sourceRevision}</span>
+              )}
+              <span>{fmt(version.capturedAt || version.createdAt)}</span>
+              <span>hash {String(version.hash || "").slice(0, 10)}</span>
+            </div>
+          ))}
+        </details>
       )}
     </div>
   );

@@ -2,76 +2,23 @@ import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join, extname, basename } from "node:path";
 import { Store, uid, now, check, hash } from "./db.ts";
 import { KnowledgeTree } from "./knowledge-tree.ts";
+import { KnowledgeIndex, queryTerms, splitChunks } from "./knowledge-index.ts";
+import { KnowledgeSources } from "./knowledge-source.ts";
 
-function queryTerms(query: string) {
-  const lower = query.toLowerCase();
-  const words = lower.match(/[a-z0-9][a-z0-9._-]+|[\u4e00-\u9fff]{2,8}/g) || [];
-  const han = lower.match(/[\u4e00-\u9fff]+/g) || [];
-  const bigrams = han.flatMap((run) =>
-    run.length < 2
-      ? [run]
-      : Array.from({ length: run.length - 1 }, (_, i) => run.slice(i, i + 2)),
-  );
-  return [...new Set([...words, ...bigrams].filter(Boolean))].slice(0, 80);
-}
-
-function chunks(text: string, max = 1100, overlap = 160) {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
-  if (!normalized) return [];
-  const blocks = normalized.split(/\n(?=#{1,6}\s)|\n{2,}/).filter(Boolean);
-  const result: { index: number; text: string; heading: string }[] = [];
-  let carry = "";
-  let heading = "";
-  let carryHeading = "";
-  const push = (body: string, chunkHeading: string) => {
-    const value = body.trim();
-    if (!value) return;
-    result.push({ index: result.length, text: value, heading: chunkHeading });
-  };
-  for (const block of blocks) {
-    const h = block.match(/^#{1,6}\s+(.+)$/m);
-    if (h) heading = h[1].trim();
-    const blockHeading = heading;
-    const next = carry ? carry + "\n\n" + block : block;
-    if (next.length <= max) {
-      if (!carry) carryHeading = blockHeading;
-      carry = next;
-      continue;
-    }
-    if (carry) push(carry, carryHeading);
-    if (block.length <= max) {
-      carry = block;
-      carryHeading = blockHeading;
-      continue;
-    }
-    let start = 0;
-    while (start < block.length) {
-      push(block.slice(start, start + max), blockHeading);
-      start += Math.max(1, max - overlap);
-    }
-    carry = "";
-    carryHeading = "";
-  }
-  if (carry) push(carry, carryHeading);
-  return result;
-}
-
-function count(haystack: string, needle: string, limit = 6) {
-  if (!needle) return 0;
-  let n = 0;
-  let at = 0;
-  while (n < limit) {
-    at = haystack.indexOf(needle, at);
-    if (at < 0) break;
-    n++;
-    at += Math.max(1, needle.length);
-  }
-  return n;
-}
+export type KnowledgeSearchResult = any;
 
 export class Knowledge {
+  index: KnowledgeIndex;
+  sources: KnowledgeSources;
   constructor(public s: Store) {
     new KnowledgeTree(s).migrate();
+    this.sources = new KnowledgeSources(s);
+    this.sources.migrate();
+    this.index = new KnowledgeIndex(s);
+    for (const item of s
+      .all("knowledge")
+      .filter((x) => x.versionStatus === "current" && x.status === "parsed"))
+      this.index.indexVersion(item);
   }
 
   async import(
@@ -83,6 +30,16 @@ export class Knowledge {
     module = "general",
     state = "pending",
     folderId: string | null = null,
+    metadata: {
+      sourceId?: string;
+      sourceType?: "directory" | "feishu" | "upload";
+      locator?: string;
+      externalId?: string;
+      sourceRevision?: string | number;
+      sourceUpdatedAt?: string;
+      sourceUrl?: string;
+      syncedAt?: string;
+    } = {},
   ) {
     new KnowledgeTree(this.s).folder(projectId, folderId);
     if (requirementId)
@@ -95,14 +52,31 @@ export class Knowledge {
 
     const fileName = basename(name);
     const contentHash = hash(bytes.toString("base64"));
+    const inferred = this.sources.infer({
+      projectId,
+      source,
+      name,
+      sourceUrl: metadata.sourceUrl,
+    });
+    const sourceEntity = metadata.sourceId
+      ? this.s.get("knowledgeSource", metadata.sourceId)
+      : this.sources.ensure(projectId, {
+          id: inferred.id,
+          type: metadata.sourceType || inferred.type,
+          name: inferred.name,
+          locator: metadata.locator || inferred.locator,
+        });
+    check(sourceEntity.projectId === projectId, "资料源不属于项目", 403);
+    const externalId = metadata.externalId || inferred.externalId || fileName;
+    const documentId = `doc-${hash(`${projectId}|${requirementId || "project"}|${sourceEntity.id}|${externalId}`).slice(0, 24)}`;
     const previous = this.s
       .all("knowledge")
       .filter(
         (x) =>
           x.projectId === projectId &&
           x.requirementId === requirementId &&
-          x.source === source &&
-          x.name === fileName,
+          (x.documentId === documentId ||
+            (!x.documentId && x.source === source && x.name === fileName)),
       )
       .sort((a, b) => (a.version || 0) - (b.version || 0));
     const latest = previous.at(-1);
@@ -110,8 +84,25 @@ export class Knowledge {
     // A source sync is idempotent: identical source bytes do not create another
     // database version or another copy of the same file. Historical task
     // snapshots keep referencing the previous immutable record.
-    if (latest && !latest.deletedAt && latest.hash === contentHash)
-      return { ...latest, unchanged: true };
+    if (latest && !latest.deletedAt && latest.hash === contentHash) {
+      const syncedAt = metadata.syncedAt || now();
+      const refreshed = {
+        ...latest,
+        sourceRevision: metadata.sourceRevision ?? latest.sourceRevision,
+        sourceUpdatedAt: metadata.sourceUpdatedAt ?? latest.sourceUpdatedAt,
+        sourceUrl: metadata.sourceUrl ?? latest.sourceUrl,
+        syncedAt,
+      };
+      this.s.put("knowledge", refreshed);
+      const document = this.s.maybe("knowledgeDocument", documentId);
+      if (document)
+        this.s.put("knowledgeDocument", {
+          ...document,
+          sourceUrl: refreshed.sourceUrl,
+          updatedAt: syncedAt,
+        });
+      return { ...refreshed, unchanged: true };
+    }
 
     const id = uid();
     await mkdir(join(this.s.root, "files"), { recursive: true, mode: 0o700 });
@@ -150,12 +141,20 @@ export class Knowledge {
       error = e instanceof Error ? e.message : "解析失败";
     }
 
+    const capturedAt = metadata.syncedAt || now();
     const item = {
       id,
       projectId,
       requirementId,
       name: fileName,
       source,
+      sourceId: sourceEntity.id,
+      documentId,
+      sourceRevision: metadata.sourceRevision,
+      sourceUpdatedAt: metadata.sourceUpdatedAt,
+      sourceUrl: metadata.sourceUrl,
+      syncedAt: capturedAt,
+      capturedAt,
       module,
       folderId,
       state,
@@ -164,10 +163,32 @@ export class Knowledge {
       text,
       status,
       error,
-      chunkCount: status === "parsed" ? chunks(text).length : 0,
-      createdAt: now(),
+      chunkCount: status === "parsed" ? splitChunks(text).length : 0,
+      versionStatus: "current",
+      supersedesId: latest?.id || null,
+      createdAt: capturedAt,
     };
-    this.s.put("knowledge", item);
+    this.s.tx(() => {
+      if (latest)
+        this.s.put("knowledge", { ...latest, versionStatus: "superseded" });
+      this.s.put("knowledge", item);
+      const existing = this.s.maybe("knowledgeDocument", documentId);
+      this.s.put("knowledgeDocument", {
+        id: documentId,
+        projectId,
+        requirementId,
+        sourceId: sourceEntity.id,
+        externalId,
+        title: fileName,
+        sourceUrl: metadata.sourceUrl || existing?.sourceUrl,
+        currentVersionId: id,
+        status: "active",
+        tags: existing?.tags || [],
+        createdAt: existing?.createdAt || capturedAt,
+        updatedAt: capturedAt,
+      });
+      this.index.indexVersion(item);
+    });
     return item;
   }
 
@@ -179,64 +200,102 @@ export class Knowledge {
   ) {
     const terms = queryTerms(query);
     const phrase = query.trim().toLowerCase();
-    const sourceItems = (items || this.s.all("knowledge")).filter(
-      (x) =>
-        !x.deletedAt &&
-        x.projectId === projectId &&
-        (!x.requirementId || x.requirementId === requirementId) &&
-        x.status === "parsed",
+    const allowed = new Set(
+      (items || this.s.all("knowledge")).map((x) => x.id),
     );
-
-    const latest = new Map<string, any>();
-    for (const item of sourceItems) {
-      const key = `${item.requirementId || "project"}|${item.source}|${item.name}`;
-      const current = latest.get(key);
-      if (!current || (current.version || 0) < (item.version || 0))
-        latest.set(key, item);
+    const sourceItems = this.s
+      .all("knowledge")
+      .filter(
+        (x) =>
+          allowed.has(x.id) &&
+          !x.deletedAt &&
+          x.projectId === projectId &&
+          (!x.requirementId || x.requirementId === requirementId) &&
+          x.status === "parsed" &&
+          x.versionStatus === "current",
+      );
+    const byId = new Map(sourceItems.map((x) => [x.id, x]));
+    const byDocument = new Map<string, any[]>();
+    for (const candidate of this.index.candidates(
+      projectId,
+      requirementId,
+      query,
+      30,
+    )) {
+      const item = byId.get(candidate.knowledgeId);
+      if (!item) continue;
+      const title = String(item.name || "").toLowerCase();
+      const heading = candidate.heading.toLowerCase();
+      const body = candidate.content.toLowerCase();
+      let score = candidate.lexicalScore;
+      if (title === phrase || title.replace(/\.[^.]+$/, "") === phrase)
+        score += 24;
+      if (heading === phrase) score += 16;
+      for (const term of terms) {
+        if (title.includes(term)) score += 10;
+        if (heading.includes(term)) score += 8;
+      }
+      if (phrase.length >= 4 && body.includes(phrase)) score += 18;
+      const list = byDocument.get(item.documentId) || [];
+      list.push({
+        id: candidate.id,
+        index: candidate.ordinal,
+        text: candidate.content,
+        heading: candidate.heading,
+        headingPath: candidate.headingPath,
+        score,
+        lexicalScore: candidate.lexicalScore,
+        matchedTerms: candidate.matchedTerms,
+      });
+      byDocument.set(item.documentId, list);
     }
-
-    return [...latest.values()]
-      .map((item) => {
-        const name = String(item.name || "").toLowerCase();
-        const module = String(item.module || "").toLowerCase();
-        const ranked = chunks(item.text).map((chunk) => {
-          const body = chunk.text.toLowerCase();
-          const heading = chunk.heading.toLowerCase();
-          let score = 0;
-          for (const term of terms) {
-            score += count(body, term) * 2;
-            if (heading.includes(term)) score += 8;
-            if (name.includes(term)) score += 10;
-            if (module.includes(term)) score += 5;
-          }
-          if (phrase.length >= 4 && body.includes(phrase)) score += 18;
-          return { ...chunk, score };
-        });
-        const matchedChunks = ranked
-          .filter((x) => x.score > 0)
+    return [...byDocument.entries()]
+      .map(([documentId, matches]) => {
+        const item = sourceItems.find((x) => x.documentId === documentId)!;
+        const matchedChunks = matches
           .sort((a, b) => b.score - a.score)
           .slice(0, 3);
-        const score =
-          matchedChunks.reduce((sum, x, i) => sum + x.score / (i + 1), 0) +
-          (matchedChunks.length ? 2 : 0);
-        const { text: _fullText, ...document } = item;
-        return { ...document, score, matchedChunks };
+        const document = this.searchResult(item, matchedChunks);
+        return {
+          ...document,
+          score: matchedChunks.reduce(
+            (sum, x, i) => sum + x.score / (i + 1),
+            0,
+          ),
+        };
       })
-      .filter((x) => !terms.length || x.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, 12);
+  }
+
+  searchResult(item: any, matchedChunks: any[]) {
+    const document = this.s.maybe("knowledgeDocument", item.documentId);
+    const { text: _text, ...version } = item;
+    return {
+      ...version,
+      externalId: document?.externalId,
+      documentStatus: document?.status || "active",
+      matchedChunks,
+    };
   }
 
   conflicts(projectId: string) {
     const items = this.s
       .all("knowledge")
-      .filter((x) => x.projectId === projectId && !x.deletedAt);
+      .filter(
+        (x) =>
+          x.projectId === projectId &&
+          !x.deletedAt &&
+          x.versionStatus === "current" &&
+          this.s.maybe("knowledgeDocument", x.documentId)?.status === "active",
+      );
     const pairs: any[] = [];
     for (let i = 0; i < items.length; i++)
       for (let j = i + 1; j < items.length; j++) {
         const a = items[i],
           b = items[j];
         if (
+          a.documentId !== b.documentId &&
           a.folderId === b.folderId &&
           a.module === b.module &&
           a.name === b.name &&

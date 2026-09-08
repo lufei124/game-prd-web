@@ -8,7 +8,7 @@
 
 ```text
 新建需求
-  → 自动检索项目知识
+  → Context Orchestrator 构建冻结 ContextPack
   → 需求澄清 / design tree frontier
   → 需求卡确认
   → HTML 原型生成与迭代
@@ -58,8 +58,8 @@ SQLite 业务状态与阶段门禁。
 
 - 当前需求
 - 当前上游成果版本
-- 自动检索知识
-- 重点资料
+- 经过 Recall Policy、FTS、rerank、Source Reader 与预算控制的 `contextPack`
+- 重点资料解析后的相关 ContextItem
 - 当前模型与思考深度
 - PRD 全局模板（仅 PRD 阶段）
 - 对话历史与待确认问题
@@ -137,22 +137,33 @@ WORKBENCH_CODEX_SKILLS_DIR
 
 ### `server/knowledge.ts`
 
-知识解析和检索。
+知识解析、版本化导入与兼容搜索 API。
 
 导入支持 Markdown、TXT、CSV、DOCX、PDF 和图片原文件。
 
-检索流程：
+知识上下文流程：
 
 ```text
-query
-  → 英文/数字词 + 中文词/双字片段
-  → 文档分块（约 1100 字符 + overlap）
-  → 文件名 / 标题 / 模块 / 正文 / 完整短语加权
-  → 每份文档保留 top chunks
-  → 全局排序 top documents
+Source sync
+  → Source / Document / immutable DocumentVersion
+  → heading-aware persistent chunks（约 1100 字符 + 160 overlap）
+  → 英文/数字词 + 中文词/双字片段 search_text
+  → SQLite FTS5
+
+Task create
+  → Recall Policy / deterministic Query Plan
+  → session + project scope filter
+  → FTS top 30 candidates / 每 Document 最多 3 个
+  → metadata rerank / document diversity
+  → frozen Source Reader / neighbor expansion
+  → dedupe / current-version filter / token budget
+  → citation assembly
+  → frozen ContextPack + RecallTrace
 ```
 
-实时检索只使用同一逻辑资料源的最新版本。旧版本继续留在历史任务快照中。
+`server/context-orchestrator.ts` 是新任务唯一的 Knowledge Context 构建入口。Search API 只用于 UI/调试候选检索，不等于 Agent Context。实时检索只使用逻辑文档的 current version；旧版本和旧 `snapshot.knowledge` 继续用于历史任务回放。
+
+默认预算：chatOnly 3000、requirement 5000、prototype 5000、PRD 6500、review 5000（近似 token）。ContextItem 使用稳定的 `K1/K2...`，Requirement/PRD 的重要知识事实必须引用这些 ID。知识正文始终标记为不可信参考，不能授予确认、文件、Shell、网络或发布权限。
 
 资料源同步是幂等的：相同 source + name 的文件如果二进制 hash 没有变化，不创建新的 knowledge version，也不复制重复原文件。
 
@@ -255,12 +266,14 @@ PRD 支持人工编辑和 AI 修改。
 
 ## 5. 知识资料源
 
-项目配置可以保存 `knowledgeSources`：
+Canonical state 是 `knowledgeSource` entity，支持：
 
 - `directory`
 - `feishu`
 
-关联时立即同步；用户也可以手动同步。知识库页面打开期间每 10 分钟执行一次 best-effort 周期同步。
+旧 `project.defaults.knowledgeSources` 会幂等迁移并暂时保留读取兼容。关联时立即同步；用户也可以手动同步。知识库页面打开期间每 10 分钟执行一次 best-effort 周期同步。
+
+Source 下是稳定 `knowledgeDocument`；既有 `knowledge` 记录作为不可变 DocumentVersion。Local 用 source 内 normalized relative path 识别文档、SHA256 判断内容变化；飞书用 document token 识别，保存 revision、URL、远端更新时间（若 API 返回）和同步时间。相同 hash 只刷新同步元数据，不制造重复文本版本。
 
 本地目录首次关联时会把精确路径加入 `authorizedRoots`，目录读取仍需经过 `directoryFiles()` 的 realpath、symlink、文件数和总体积校验。
 
@@ -340,3 +353,7 @@ npm run build
 ```
 
 选择 macOS 是因为当前生产 Codex 启动器依赖 macOS `sandbox-exec` 目录隔离模型。
+
+## 10. MVP 后续边界
+
+MVP 不包含 User/Team/Workspace Scope、Vector/Embedding、Recall LLM Subagent、自动 Learning、Knowledge/Code Graph、AST、Git/Notion/Web Connector 或语义冲突裁决。V2 可在 RecallTrace 证明词法召回不足后评估 User opt-in、Candidate Learning（必须用户确认）、Recall Quality 和可选 Vector；V3 再评估团队域、连接器、图谱与自动治理。

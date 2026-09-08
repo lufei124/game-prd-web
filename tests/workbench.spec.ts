@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { html, metadata, prd } from "./fixtures.ts";
+import { writeFile } from "node:fs/promises";
 
 const post = async (page: any, path: string, body: any) =>
   page.evaluate(
@@ -57,7 +58,8 @@ test("knowledge sources sync and chunk search returns relevant text", async ({
   page,
 }) => {
   await page.goto("/");
-  await createProject(page, "知识库验收");
+  const project = await createProject(page, "知识库验收");
+  const projectId = project.id;
   await page.getByRole("button", { name: "知识库" }).click();
   page.once("dialog", (dialog) =>
     dialog.accept("/private/tmp/game-prd-web-e2e-knowledge"),
@@ -79,19 +81,82 @@ test("knowledge sources sync and chunk search returns relevant text", async ({
   page.once("dialog", (dialog) => dialog.accept("feishu-rule"));
   await page.getByRole("button", { name: "关联飞书文档" }).click();
   await expect(page.getByText("飞书文档.md", { exact: true })).toBeVisible();
+  const feishuState = await get(
+    page,
+    `/knowledge?projectId=${encodeURIComponent(projectId)}`,
+  );
+  const feishuVersion = feishuState.items.find((x: any) =>
+    String(x.source).startsWith("feishu:"),
+  );
+  expect(feishuVersion.sourceRevision).toBe(1);
+  expect(feishuVersion.sourceUrl).toContain(
+    "example.feishu.cn/docx/feishu-rule",
+  );
   const search = page.getByPlaceholder("测试 AI 能否找到某条项目规则…");
   await search.fill("超过七天不可退款");
   await search.press("Enter");
   await expect(
     page.locator(".knowledge-item").filter({ hasText: "会员退款规则.md" }),
   ).toContainText("会员退款必须在订单详情页发起");
-  const projectId = await page.getByLabel("当前项目").inputValue();
   const result = await get(
     page,
     `/knowledge/search?projectId=${encodeURIComponent(projectId)}&q=${encodeURIComponent("会员退款规则")}`,
   );
   expect(result[0].text).toBeUndefined();
   expect(result[0].matchedChunks.length).toBeGreaterThan(0);
+
+  const requirement = await post(page, "/requirements", {
+    projectId,
+    name: "会员退款",
+    mode: "full",
+  });
+  await post(page, `/requirements/${requirement.id}/chat`, {
+    prompt: "会员退款超过七天怎么处理？",
+    stage: "requirement",
+  });
+  await expect
+    .poll(
+      async () =>
+        (await get(page, `/requirements/${requirement.id}`)).tasks.at(-1)
+          ?.status,
+    )
+    .toBe("completed");
+  const before = await get(page, `/requirements/${requirement.id}`);
+  const oldKnowledgeId =
+    before.tasks.at(-1).snapshot.contextPack.items[0].knowledgeId;
+
+  await writeFile(
+    "/private/tmp/game-prd-web-e2e-knowledge/会员退款规则.md",
+    "# 会员退款规则\n会员退款必须在订单详情页发起，超过十四天不可退款。",
+  );
+  await page
+    .locator(".source-card")
+    .filter({ hasText: "game-prd-web-e2e-knowledge" })
+    .getByTitle("立即同步")
+    .click();
+  await expect(
+    page
+      .locator(".source-card")
+      .filter({ hasText: "game-prd-web-e2e-knowledge" }),
+  ).toContainText("1 项变化");
+  await post(page, `/requirements/${requirement.id}/chat`, {
+    prompt: "会员退款超过十四天怎么处理？",
+    stage: "requirement",
+  });
+  await expect
+    .poll(
+      async () =>
+        (await get(page, `/requirements/${requirement.id}`)).tasks.at(-1)
+          ?.status,
+    )
+    .toBe("completed");
+  const after = await get(page, `/requirements/${requirement.id}`);
+  const newKnowledgeId =
+    after.tasks.at(-1).snapshot.contextPack.items[0].knowledgeId;
+  expect(newKnowledgeId).not.toBe(oldKnowledgeId);
+  expect(after.tasks[0].snapshot.contextPack.items[0].knowledgeId).toBe(
+    oldKnowledgeId,
+  );
 });
 
 test("full v2 flow keeps prototype edits preview-first and review lineage", async ({

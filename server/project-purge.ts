@@ -71,6 +71,14 @@ export async function purgeProject(
         await rm(join(transcripts, encoded), { recursive: true, force: true });
     }
   return s.tx(() => {
+    const chunks = s.db
+      .prepare("SELECT id FROM knowledge_chunks WHERE project_id=?")
+      .all(id) as Array<{ id: string }>;
+    const removeFts = s.db.prepare(
+      "DELETE FROM knowledge_fts WHERE chunk_id=?",
+    );
+    for (const chunk of chunks) removeFts.run(chunk.id);
+    s.db.prepare("DELETE FROM knowledge_chunks WHERE project_id=?").run(id);
     s.remove("projectTrash", id);
     s.audit(actor, "project.purge", id);
     return { id, deleted: true, permanent: true };

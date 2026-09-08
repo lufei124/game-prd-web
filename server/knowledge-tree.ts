@@ -83,7 +83,9 @@ export class KnowledgeTree {
       .all("knowledgeLink")
       .find(
         (x) =>
-          x.requirementId === requirementId && x.knowledgeId === knowledgeId,
+          x.requirementId === requirementId &&
+          (x.knowledgeId === knowledgeId ||
+            (k.documentId && x.documentId === k.documentId)),
       );
     return (
       existing ||
@@ -92,17 +94,21 @@ export class KnowledgeTree {
         projectId: req.projectId,
         requirementId,
         knowledgeId,
+        documentId: k.documentId,
         createdAt: now(),
       })
     );
   }
   unlink(requirementId: string, knowledgeId: string) {
     this.s.get("requirement", requirementId);
+    const knowledge = this.s.maybe("knowledge", knowledgeId);
     for (const l of this.s
       .all("knowledgeLink")
       .filter(
         (x) =>
-          x.requirementId === requirementId && x.knowledgeId === knowledgeId,
+          x.requirementId === requirementId &&
+          (x.knowledgeId === knowledgeId ||
+            (knowledge?.documentId && x.documentId === knowledge.documentId)),
       ))
       this.s.remove("knowledgeLink", l.id);
     return { removed: true };
@@ -114,9 +120,22 @@ export class KnowledgeTree {
   private retire(id: string) {
     const k = this.s.get("knowledge", id);
     this.s.put("knowledge", { ...k, deletedAt: k.deletedAt || now() });
+    if (k.documentId) {
+      const document = this.s.maybe("knowledgeDocument", k.documentId);
+      if (document?.currentVersionId === k.id)
+        this.s.put("knowledgeDocument", {
+          ...document,
+          status: "deprecated",
+          updatedAt: now(),
+        });
+    }
     for (const l of this.s
       .all("knowledgeLink")
-      .filter((x) => x.knowledgeId === id))
+      .filter(
+        (x) =>
+          x.knowledgeId === id ||
+          (k.documentId && x.documentId === k.documentId),
+      ))
       this.s.remove("knowledgeLink", l.id);
     this.s.audit("user", "knowledge.delete", id);
     return { id, deleted: true };

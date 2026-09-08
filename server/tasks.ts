@@ -11,6 +11,7 @@ import {
 import { Extensions } from "./extensions.ts";
 import { Knowledge } from "./knowledge.ts";
 import { type AgentRuntime, type AgentHost } from "./agent.ts";
+import { ContextOrchestrator } from "./context-orchestrator.ts";
 
 export function patchContent(
   base: string,
@@ -196,7 +197,6 @@ export class Tasks {
         );
     }
 
-    const all = this.s.all("knowledge").filter((k) => !k.deletedAt);
     const linkedIds = this.s
       .all("knowledgeLink")
       .filter((l) => l.requirementId === r.id)
@@ -214,15 +214,41 @@ export class Tasks {
       );
       return k;
     });
-    const relevant = this.knowledge.search(
-      r.projectId,
-      r.id,
-      r.name + " " + body.prompt,
-      all,
-    );
-    const knowledge = [
-      ...new Map([...relevant, ...explicit].map((k) => [k.id, k])).values(),
-    ];
+    const taskId = uid();
+    let knowledge: any[] = [];
+    let contextPack: any = undefined;
+    let recallTrace: any = undefined;
+    if (body.conversation) {
+      ({ contextPack, recallTrace } = new ContextOrchestrator(
+        this.s,
+        this.knowledge,
+      ).buildContext({
+        taskId,
+        projectId: r.projectId,
+        requirementId: r.id,
+        requirementName: r.name,
+        prompt: body.prompt,
+        stage: body.stage || body.kind,
+        chatOnly: !!body.chatOnly,
+        selection: body.selection || "",
+        hasPrototype: Boolean(r.heads.prototype),
+        referenceIds: body.referenceIds || [],
+        pinnedKnowledgeIds: linkedIds,
+        artifactNames: this.domain
+          .versions(id)
+          .filter((v) => Object.values(r.heads).includes(v.id))
+          .map((v) => `${v.kind}-v${v.number}`),
+      }));
+    } else {
+      const relevant = this.knowledge.search(
+        r.projectId,
+        r.id,
+        r.name + " " + body.prompt,
+      );
+      knowledge = [
+        ...new Map([...relevant, ...explicit].map((k) => [k.id, k])).values(),
+      ];
+    }
 
     const snapshot = {
       releases,
@@ -238,6 +264,7 @@ export class Tasks {
       chatOnly: !!body.chatOnly,
       previewOnly: !!body.previewOnly,
       knowledge,
+      ...(body.conversation ? { contextPack } : {}),
       heads: { ...r.heads },
       confirmed: { ...r.confirmed },
       waiver: r.waiver,
@@ -262,7 +289,7 @@ export class Tasks {
         .slice(-30),
     };
     const t = {
-      id: uid(),
+      id: taskId,
       requirementId: id,
       projectId: r.projectId,
       kind: body.kind,
@@ -275,6 +302,7 @@ export class Tasks {
       createdAt: now(),
       updatedAt: now(),
     };
+    if (recallTrace) this.s.put("recallTrace", recallTrace);
     this.s.put("task", t);
     this.s.put("message", {
       id: uid(),
@@ -306,7 +334,15 @@ export class Tasks {
       return {
         requirement: snap.requirement,
         versions: snap.versions,
-        knowledge: snap.knowledge.map(({ text, ...k }: any) => k),
+        contextPack: snap.contextPack
+          ? {
+              ...snap.contextPack,
+              items: snap.contextPack.items.map(
+                ({ content, ...item }: any) => item,
+              ),
+            }
+          : undefined,
+        knowledge: (snap.knowledge || []).map(({ text, ...k }: any) => k),
         annotations: snap.annotations,
         messages: snap.messages,
         questions: snap.questions || [],
@@ -345,7 +381,12 @@ export class Tasks {
       };
     }
     if (name === "read_knowledge") {
-      const k = snap.knowledge.find((x: any) => x.id === args.id);
+      const frozenId = snap.contextPack?.items.find(
+        (x: any) => x.knowledgeId === args.id,
+      )?.knowledgeId;
+      const k = frozenId
+        ? this.s.get("knowledge", frozenId)
+        : (snap.knowledge || []).find((x: any) => x.id === args.id);
       check(k, "资料不在任务冻结范围内", 403);
       if (k.status === "image") {
         const ext = extname(k.name).slice(1).toLowerCase();
@@ -395,6 +436,14 @@ export class Tasks {
       );
       let content = args.content;
       let metadata = args.metadata;
+      if (snap.contextPack && ["requirement", "prd"].includes(t.kind))
+        metadata = {
+          ...metadata,
+          contextPackId: snap.contextPack.id,
+          availableCitations: snap.contextPack.items.map(
+            (x: any) => x.citationId,
+          ),
+        };
       if (t.base) {
         const base = snap.versions.find((v: any) => v.id === t.base);
         check(base, "基础版本缺失");
@@ -680,9 +729,19 @@ export class Tasks {
       .filter((q) => q.taskId === id && q.answer)
       .map((q) => `${q.question}\n用户回答：${q.answer}`)
       .join("\n");
+    const retryId = uid();
+    const retryContextPack = t.snapshot.contextPack
+      ? {
+          ...t.snapshot.contextPack,
+          id: uid(),
+          taskId: retryId,
+          createdAt: now(),
+          items: t.snapshot.contextPack.items.map((x: any) => ({ ...x })),
+        }
+      : undefined;
     const copy = {
       ...t,
-      id: uid(),
+      id: retryId,
       retryOf: id,
       status: "queued",
       progress: 0,
@@ -693,9 +752,22 @@ export class Tasks {
       sessionId: null,
       events: [],
       prompt: t.prompt + "\n" + answers,
+      snapshot: retryContextPack
+        ? { ...t.snapshot, contextPack: retryContextPack }
+        : t.snapshot,
       createdAt: now(),
       updatedAt: now(),
     };
+    if (retryContextPack) {
+      const trace = this.s.all("recallTrace").find((x) => x.taskId === t.id);
+      if (trace)
+        this.s.put("recallTrace", {
+          ...trace,
+          id: uid(),
+          taskId: retryId,
+          createdAt: now(),
+        });
+    }
     this.s.put("task", copy);
     setImmediate(() => void this.run(copy.id));
     return copy;

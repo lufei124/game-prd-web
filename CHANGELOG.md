@@ -1,5 +1,12 @@
 # 变更记录
 
+## 2026-09-08 · Knowledge Context Engine MVP
+
+- 新增 Source/Document/Version 追踪、持久 Chunk、SQLite FTS5、确定性 Recall/Query/Scope/Rerank/Source Reader、token budget、ContextPack、RecallTrace 与 K 引用。
+- 新 conversation task 冻结 `snapshot.contextPack`；Codex 不再接收 raw search results，历史 `snapshot.knowledge` 保持兼容。
+- Knowledge Source 改为 canonical entity，幂等兼容迁移旧 `project.defaults.knowledgeSources`；Local hash/version 链和飞书 revision/URL 可追踪。
+- 知识页显示 Source/DocumentVersion 元数据与任务引用来源；保留 Codex native Skills 和既有确认、候选、发布、安全门禁。
+
 ## 2026-09-08 · Conversation-first 工作台审查修复
 
 - 修复首次发送需求从新建首屏进入工作区时 React effect 清理导致的白屏。

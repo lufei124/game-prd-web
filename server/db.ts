@@ -29,6 +29,47 @@ export class Store {
     this.db.exec(
       readFileSync(new URL("./migrations/001.sql", import.meta.url), "utf8"),
     );
+    const needsKnowledgeContext = !this.db
+      .prepare("SELECT 1 FROM migrations WHERE version=3")
+      .get();
+    if (needsKnowledgeContext) {
+      const rows = this.db
+        .prepare("SELECT kind,id,data FROM entities ORDER BY kind,id")
+        .all();
+      if (rows.length) {
+        const backupDir = join(root, "backups");
+        mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+        const backupPath = join(
+          backupDir,
+          `knowledge-context-v3-${Date.now()}.sqlite`,
+        );
+        this.db.prepare("VACUUM INTO ?").run(backupPath);
+        const copy = new DatabaseSync(backupPath, { readOnly: true });
+        try {
+          check(
+            JSON.stringify(
+              copy
+                .prepare("SELECT kind,id,data FROM entities ORDER BY kind,id")
+                .all(),
+            ) === JSON.stringify(rows),
+            "Knowledge Context 迁移备份校验失败",
+          );
+          check(
+            Object.values(copy.prepare("PRAGMA integrity_check").get()!)[0] ===
+              "ok",
+            "Knowledge Context 迁移备份完整性校验失败",
+          );
+        } finally {
+          copy.close();
+        }
+      }
+    }
+    this.db.exec(
+      readFileSync(
+        new URL("./migrations/003_knowledge_context.sql", import.meta.url),
+        "utf8",
+      ),
+    );
   }
   all<T = any>(kind: string): T[] {
     return this.db

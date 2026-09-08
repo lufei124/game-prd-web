@@ -407,7 +407,8 @@ test("knowledge formats, provenance, conflicts and trusted proposal adoption", a
       "pending",
     );
     assert.equal(b.version, 2);
-    assert.equal(f.k.conflicts(f.p.id).length, 1);
+    // Historical versions of one logical document are lineage, not conflict.
+    assert.equal(f.k.conflicts(f.p.id).length, 0);
     assert.ok(f.k.search(f.p.id, null, "领取").length);
     const image = await f.k.import(
       f.p.id,
