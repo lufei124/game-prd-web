@@ -5,6 +5,23 @@ export const kindSchema = z.enum(["requirement", "prototype", "prd", "review"]);
 export type ArtifactKind = z.infer<typeof kindSchema>;
 
 export const prototypeSchema = z.object({
+  presentation: z
+    .object({
+      format: z.literal("dual-fidelity"),
+      explanations: z
+        .array(
+          z.object({
+            pageId: z.string().min(1),
+            title: z.string().min(1),
+            purpose: z.string().min(1),
+            interactions: z.array(z.string().min(1)).min(1),
+            rules: z.array(z.string().min(1)),
+            exceptions: z.array(z.string().min(1)),
+          }),
+        )
+        .min(1),
+    })
+    .optional(),
   schemaVersion: z.literal("1.0"),
   requirementName: z.string().min(1),
   module: z.string().min(1),
@@ -42,6 +59,44 @@ export const prototypeSchema = z.object({
     }),
   ),
 });
+
+export function validateDualPrototype(content: string, metadata: any) {
+  const parsed = prototypeSchema.parse(metadata);
+  check(
+    parsed.presentation?.format === "dual-fidelity",
+    "原型必须同时提供线框图、高保真和页面解释",
+  );
+  for (const id of ["prototype-high-fidelity", "prototype-wireframe"]) {
+    const expression = new RegExp(
+      `<style\\b[^>]*\\bid=["']${id}["'][^>]*>([\\s\\S]*?)<\\/style>`,
+      "gi",
+    );
+    const matches = [...content.matchAll(expression)];
+    check(
+      matches.length === 1 && matches[0][1].trim().length > 0,
+      `缺少或重复原型视图样式：${id}`,
+    );
+  }
+  const notes = parsed.presentation!.explanations;
+  check(
+    new Set(notes.map((n) => n.pageId)).size === notes.length,
+    "页面解释不可重复",
+  );
+  check(
+    parsed.pages.every((p) => notes.some((n) => n.pageId === p.id)) &&
+      notes.every((n) => parsed.pages.some((p) => p.id === n.pageId)),
+    "每个原型页面必须有对应解释",
+  );
+  const embedded = content.match(
+    /<script[^>]*id=["']prototype-meta["'][^>]*>([\s\S]*?)<\/script>/i,
+  );
+  check(
+    embedded &&
+      JSON.stringify(prototypeSchema.parse(JSON.parse(embedded[1]))) ===
+        JSON.stringify(parsed),
+    "HTML metadata 与结构化产物不一致",
+  );
+}
 
 export const reviewSchema = z.object({
   issues: z.array(
@@ -101,6 +156,13 @@ export class Domain {
     check(actor === "user", "只有用户可以删除项目", 403);
     return this.s.tx(() => {
       const project = this.s.get("project", id);
+      check(
+        !this.s
+          .all("requirementTrash")
+          .some((t) => t.projectId === id && t.purging),
+        "需求正在清理，请完成清理后删除项目",
+        409,
+      );
       check(confirmedName === project.name, "请输入完整项目名称确认删除", 409);
       check(
         !this.s
@@ -225,6 +287,7 @@ export class Domain {
     check(actor === "user", "只有用户可以恢复需求", 403);
     return this.s.tx(() => {
       const trash = this.s.get("requirementTrash", id);
+      check(!trash.purging, "需求正在永久删除，请重试清理，不能恢复", 409);
       check(this.s.maybe("project", trash.projectId), "请先恢复所属项目", 409);
       for (const entry of trash.entries) {
         check(
@@ -320,7 +383,7 @@ export class Domain {
       check(
         (r.heads.prototype && r.heads.prototype === r.confirmed.prototype) ||
           r.waiver?.requirementVersion === r.heads.requirement,
-        "请确认当前原型，或由用户确认本需求无 UI 变化并豁免",
+        "请确认当前原型，或由用户明确选择跳过原型",
         409,
       );
     }
@@ -349,6 +412,7 @@ export class Domain {
       this.gate(r, kind);
       if (kind === "prototype") {
         metadata = prototypeSchema.parse(metadata);
+        if (metadata.presentation) validateDualPrototype(content, metadata);
         const embedded = content.match(
           /<script[^>]*id=["']prototype-meta["'][^>]*>([\s\S]*?)<\/script>/i,
         );
@@ -468,7 +532,7 @@ export class Domain {
 
   waive(id: string, versionId: string, reason: string, actor = "user") {
     check(actor === "user", "Agent 无权豁免原型", 403);
-    check(reason.trim(), "请说明无 UI/交互变化的依据");
+    check(reason.trim(), "请说明跳过原型的原因");
     const r = this.s.get<Requirement>("requirement", id);
     check(
       r.heads.requirement === versionId &&

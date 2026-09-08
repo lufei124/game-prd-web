@@ -31,7 +31,7 @@ import {
   Delivery,
   type DeliveryPlugin,
 } from "./plugins.ts";
-import { purgeProject } from "./project-purge.ts";
+import { purgeProject, purgeRequirement } from "./project-purge.ts";
 import { bootstrap } from "./bootstrap.ts";
 const text = z.string().trim().min(1).max(500_000),
   id = z.string().min(1).max(100);
@@ -50,6 +50,13 @@ export async function createApp(
       await purgeProject(s, trash.id, trash.name);
     } catch {
       /* Retain tombstone for an explicit retry. */
+    }
+  }
+  for (const trash of s.all("requirementTrash").filter((x) => x.purging)) {
+    try {
+      await purgeRequirement(s, trash.id, trash.name);
+    } catch {
+      /* Retry retained tombstone later. */
     }
   }
   const domain = new Domain(s),
@@ -256,6 +263,13 @@ export async function createApp(
       409,
     );
     return domain.deleteRequirement(r.params.id, body.confirmedName);
+  });
+  route("delete", "/api/requirements/:id/permanent", (r) => {
+    const b = z
+      .object({ confirmedName: text.max(120) })
+      .strict()
+      .parse(r.body);
+    return purgeRequirement(s, r.params.id, b.confirmedName);
   });
   route("post", "/api/requirements/:id/restore-deleted", (r) =>
     domain.restoreRequirement(r.params.id),

@@ -4,6 +4,7 @@ import { posix, extname } from "node:path";
 import { Store, check, uid, now } from "./db.ts";
 import {
   Domain,
+  validateDualPrototype,
   type Requirement,
   type Version,
   type ArtifactKind,
@@ -252,6 +253,11 @@ export class Tasks {
 
     const snapshot = {
       releases,
+      dualPrototype: body.kind === "prototype",
+      upgradePrototype:
+        body.kind === "prototype" &&
+        !!r.heads.prototype &&
+        !this.s.get("version", r.heads.prototype).metadata?.presentation,
       conversation: !!body.conversation,
       stage: body.stage || body.kind,
       action: body.action || "discuss",
@@ -458,6 +464,8 @@ export class Tasks {
         }
       }
       check(typeof content === "string" && content.trim(), "候选内容不能为空");
+      if (t.kind === "prototype" && snap.dualPrototype)
+        validateDualPrototype(content, metadata);
       t.candidate = {
         content,
         metadata,

@@ -7,7 +7,7 @@ import { Store } from "../server/db.ts";
 import { Domain } from "../server/domain.ts";
 import { Knowledge } from "../server/knowledge.ts";
 import { bootstrap } from "../server/bootstrap.ts";
-import { purgeProject } from "../server/project-purge.ts";
+import { purgeProject, purgeRequirement } from "../server/project-purge.ts";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "requirement-delete-"));
@@ -162,6 +162,52 @@ test("project recovery and permanent cleanup include already recycled requiremen
     await assert.rejects(readFile(join(f.root, "files", owned.id)));
     assert.deepEqual(k.index.chunks(owned.id), []);
     assert(!f.s.maybe("requirementTrash", r.id));
+  } finally {
+    await f.close();
+  }
+});
+
+test("permanent requirement deletion clears owned files and index only, blocks restore while purging", async () => {
+  const f = await fixture();
+  try {
+    const p = f.d.project("项目"),
+      r = f.d.requirement(p.id, "需求"),
+      other = f.d.requirement(p.id, "其他需求");
+    const k = new Knowledge(f.s);
+    const shared = await k.import(
+      p.id,
+      null,
+      "共享.md",
+      Buffer.from("共享规则"),
+      "manual:shared",
+    );
+    const owned = await k.import(
+      p.id,
+      r.id,
+      "独有.md",
+      Buffer.from("独有规则"),
+      "upload:owned",
+    );
+    f.d.deleteRequirement(r.id, r.name);
+    await assert.rejects(purgeRequirement(f.s, r.id, r.name, "agent"), /用户/);
+    await assert.rejects(purgeRequirement(f.s, r.id, "错误"), /名称/);
+    f.s.put("requirementTrash", {
+      ...f.s.get("requirementTrash", r.id),
+      purging: true,
+    });
+    assert.throws(() => f.d.restoreRequirement(r.id), /不能恢复/);
+    assert.throws(() => f.d.deleteProject(p.id, p.name), /清理/);
+    await purgeRequirement(f.s, r.id, r.name);
+    assert(!f.s.maybe("requirementTrash", r.id));
+    await assert.rejects(readFile(join(f.root, "files", owned.id)));
+    assert.equal(
+      (await readFile(join(f.root, "files", shared.id))).toString(),
+      "共享规则",
+    );
+    assert.equal(k.index.chunks(owned.id).length, 0);
+    assert(k.index.chunks(shared.id).length > 0);
+    assert(f.s.maybe("requirement", other.id));
+    assert.throws(() => f.d.restoreRequirement(r.id));
   } finally {
     await f.close();
   }

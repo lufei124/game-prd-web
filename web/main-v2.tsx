@@ -153,6 +153,7 @@ function withInspector(html: string) {
       const r=el.getBoundingClientRect();
       Object.assign(box.style,{display:'block',left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
     }
+    window.addEventListener('message',e=>{ if(e.source===parent&&e.data?.type==='forge-prototype-view'&&['high','wireframe'].includes(e.data.value))document.documentElement.setAttribute('data-prototype-view',e.data.value); });
     window.addEventListener('message',e=>{ if(e.data&&e.data.type==='forge-select-mode'){ enabled=!!e.data.enabled; if(!enabled) box.style.display='none'; document.documentElement.style.cursor=enabled?'crosshair':''; }});
     document.addEventListener('keydown',e=>{if(e.key==='Escape'){enabled=false;box.style.display='none';parent.postMessage({type:'forge-inspect-cancel'},'*');}},true);
     document.addEventListener('mousemove',e=>mark(e.target),true);
@@ -332,7 +333,7 @@ function App() {
 
   const removeResource = async (target: any, confirmedName: string) => {
     await api(
-      `/${target.kind === "project" ? "projects" : "requirements"}/${target.id}`,
+      `/${target.kind === "project" ? "projects" : "requirements"}/${target.id}${target.permanent ? "/permanent" : ""}`,
       "DELETE",
       { confirmedName },
     );
@@ -347,7 +348,7 @@ function App() {
     }
     await reload();
     if (target.kind === "requirement") await loadKnowledge();
-    setToast("已移入回收站，可恢复");
+    setToast(target.permanent ? "已永久删除" : "已移入回收站，可恢复");
   };
   const restoreResource = async (target: any) => {
     await api(
@@ -927,6 +928,28 @@ function Workspace(props: any) {
     await onRefresh();
   };
 
+  const skipPrototype = () =>
+    run(async () => {
+      if (req.confirmed?.requirement !== requirementVersion.id)
+        await api(`/requirements/${requirementId}/confirm`, "POST", {
+          kind: "requirement",
+          versionId: requirementVersion.id,
+        });
+      await api(`/requirements/${requirementId}/waive`, "POST", {
+        versionId: requirementVersion.id,
+        reason: "用户选择跳过原型，直接编写 PRD",
+      });
+      await api(`/requirements/${requirementId}/chat`, "POST", {
+        prompt:
+          "用户已明确跳过原型。基于已确认需求与项目资料生成 PRD，不虚构已确认的原型。",
+        stage: "prd",
+        action: "generate",
+        referenceIds: linked,
+        executor: "codex",
+        model,
+        reasoningEffort: effort,
+      });
+    }, "已跳过原型，正在生成 PRD");
   const confirmRequirement = () =>
     run(async () => {
       await api(`/requirements/${requirementId}/confirm`, "POST", {
@@ -935,7 +958,7 @@ function Workspace(props: any) {
       });
       await api(`/requirements/${requirementId}/chat`, "POST", {
         prompt:
-          "需求卡已经由用户确认。直接根据已确认需求卡和相关知识生成第一版可交互 HTML 原型。",
+          "需求卡已经由用户确认。一次生成包含线框图、高保真双视图和逐页交互解释的可交互 HTML 原型，共用业务逻辑，默认 iPhone 17 Pro 402×874。",
         stage: "prototype",
         action: "generate",
         referenceIds: linked,
@@ -1209,6 +1232,12 @@ function Workspace(props: any) {
                 version={requirementVersion}
                 confirmed={req.confirmed?.requirement === requirementVersion.id}
                 onConfirm={confirmRequirement}
+                onSkip={
+                  req.mode === "full" && requirementVersion
+                    ? skipPrototype
+                    : undefined
+                }
+                disabled={Boolean(running) || props.busy}
                 requirementId={requirementId}
                 versions={versions.filter((v: any) => v.kind === "requirement")}
                 onRestore={(versionId: string) =>
@@ -1244,6 +1273,11 @@ function Workspace(props: any) {
                 applyCandidate={applyCandidate}
                 discardCandidate={discardCandidate}
                 onConfirm={confirmPrototype}
+                onSkip={
+                  req.mode === "full" && requirementVersion
+                    ? skipPrototype
+                    : undefined
+                }
               />
             )}
             {(stage === "prd" || stage === "review") && prdVersion && (
@@ -1502,6 +1536,8 @@ function RequirementArtifact({
   onRestore,
   confirmed,
   onConfirm,
+  onSkip,
+  disabled,
   requirementId,
   onRefresh,
   run,
@@ -1535,8 +1571,21 @@ function RequirementArtifact({
             versions={versions}
             onRestore={onRestore}
           />
+          {onSkip && (
+            <button
+              className="ghost"
+              onClick={onSkip}
+              disabled={dirty || disabled}
+            >
+              跳过原型，生成 PRD
+            </button>
+          )}
           {!confirmed && (
-            <button className="primary" onClick={onConfirm} disabled={dirty}>
+            <button
+              className="primary"
+              onClick={onConfirm}
+              disabled={dirty || disabled}
+            >
               <Check size={15} /> 确认需求
             </button>
           )}
@@ -1580,14 +1629,54 @@ function PrototypeArtifact({
   applyCandidate,
   discardCandidate,
   onConfirm,
+  onSkip,
 }: any) {
   const [candidatePreview, setCandidatePreview] = useState(true);
-  const [device, setDevice] = useState("desktop");
+  const [device, setDevice] = useState("mobile");
+  const [zoom, setZoom] = useState(() => {
+    try {
+      const value = Number(localStorage.getItem("forge:prototype-zoom"));
+      return [25, 50, 75, 100, 125, 150, 200].includes(value) ? value : 100;
+    } catch {
+      return 100;
+    }
+  });
+  const [fidelity, setFidelity] = useState("high");
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [canvasWidth, setCanvasWidth] = useState(800);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const observer = new ResizeObserver(() =>
+      setCanvasWidth(Math.max(320, canvas.clientWidth - 36)),
+    );
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
+  const frameWidth = device === "mobile" ? 402 : canvasWidth;
   useEffect(() => setCandidatePreview(true), [candidateTask?.id]);
   const html =
     candidateTask && candidatePreview
       ? candidateTask.candidate.content
       : version.content;
+  const shownMetadata =
+    candidateTask && candidatePreview
+      ? candidateTask.candidate.metadata
+      : version.metadata;
+  const dual = shownMetadata?.presentation?.format === "dual-fidelity";
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "forge-prototype-view", value: fidelity },
+      "*",
+    );
+  }, [fidelity]);
+  const preparedHtml = dual
+    ? html.replace(
+        /<html\b([^>]*)>/i,
+        (_: string, attrs: string) =>
+          `<html${attrs.replace(/\sdata-prototype-view\s*=\s*(?:"[^"]*"|'[^']*')/gi, "")} data-prototype-view="high">`,
+      )
+    : html;
   return (
     <ArtifactShell
       title="交互原型"
@@ -1619,6 +1708,15 @@ function PrototypeArtifact({
           >
             <Download size={15} /> HTML
           </button>
+          {onSkip && (
+            <button
+              className="ghost"
+              onClick={onSkip}
+              disabled={disabled || Boolean(candidateTask)}
+            >
+              跳过原型，生成 PRD
+            </button>
+          )}
           {!confirmed && !candidateTask && (
             <button className="primary" onClick={onConfirm}>
               <Check size={15} /> 确认原型
@@ -1641,12 +1739,47 @@ function PrototypeArtifact({
           <span>{selectionMode ? "正在点选元素" : "可直接操作预览"}</span>
         </div>
         <select
+          aria-label="原型视图"
+          value={fidelity}
+          onChange={(e) => {
+            setFidelity(e.target.value);
+            onClearSelection();
+            setSelectionMode(false);
+          }}
+        >
+          {dual ? (
+            <>
+              <option value="wireframe">线框图</option>
+              <option value="high">高保真</option>
+            </>
+          ) : (
+            <option value="high">原有视图（历史版本）</option>
+          )}
+        </select>
+        <select
           aria-label="原型预览尺寸"
           value={device}
           onChange={(e) => setDevice(e.target.value)}
         >
           <option value="desktop">自适应</option>
-          <option value="mobile">手机 · 390px</option>
+          <option value="mobile">iPhone 17 Pro · 402 × 874</option>
+        </select>
+        <select
+          aria-label="原型缩放比例"
+          value={zoom}
+          onChange={(e) => {
+            const value = Number(e.target.value);
+            setZoom(value);
+            try {
+              localStorage.setItem("forge:prototype-zoom", String(value));
+            } catch {}
+          }}
+        >
+          {[25, 50, 75, 100, 125, 150, 200].map((value) => (
+            <option value={value} key={value}>
+              {value}%
+            </option>
+          ))}
         </select>
       </div>
       {candidateTask && (
@@ -1684,20 +1817,107 @@ function PrototypeArtifact({
       {candidateTask && (
         <p className="candidate-summary">{candidateTask.candidate.summary}</p>
       )}
-      <div className={`prototype-canvas ${device}`}>
-        <iframe
-          ref={iframeRef}
-          className="prototype-frame"
-          title="交互原型"
-          srcDoc={withInspector(html)}
-          sandbox="allow-scripts"
-          onLoad={() =>
-            iframeRef.current?.contentWindow?.postMessage(
-              { type: "forge-select-mode", enabled: selectionMode },
-              "*",
-            )
-          }
+      <div className="prototype-review-layout">
+        <ResizeHandle
+          name="原型与解释分栏"
+          target=".prototype-canvas"
+          variable="--prototype-view-width"
+          min={280}
+          reserve={240}
         />
+        <div ref={canvasRef} className={`prototype-canvas ${device}`}>
+          <div
+            className="prototype-scale-box"
+            style={{
+              width: (frameWidth * zoom) / 100,
+              height: (874 * zoom) / 100,
+            }}
+          >
+            <iframe
+              key={`${version.id}:${candidateTask?.id || "current"}:${candidatePreview}`}
+              ref={iframeRef}
+              className="prototype-frame"
+              style={{
+                width: frameWidth,
+                height: 874,
+                transform: `scale(${zoom / 100})`,
+                transformOrigin: "top left",
+              }}
+              title="交互原型"
+              srcDoc={withInspector(preparedHtml)}
+              sandbox="allow-scripts"
+              onLoad={() => {
+                iframeRef.current?.contentWindow?.postMessage(
+                  { type: "forge-prototype-view", value: fidelity },
+                  "*",
+                );
+                iframeRef.current?.contentWindow?.postMessage(
+                  { type: "forge-select-mode", enabled: selectionMode },
+                  "*",
+                );
+              }}
+            />
+          </div>
+        </div>
+        <aside className="prototype-explanations" aria-label="原型解释">
+          <h3>页面与交互说明</h3>
+          {(shownMetadata?.presentation?.explanations || []).map(
+            (note: any) => (
+              <section key={note.pageId}>
+                <h4>{note.title}</h4>
+                <p>{note.purpose}</p>
+                <b>操作与反馈</b>
+                <ul>
+                  {note.interactions.map((x: string, i: number) => (
+                    <li key={i}>{x}</li>
+                  ))}
+                </ul>
+                <b>规则与依据</b>
+                <ul>
+                  {note.rules.map((x: string, i: number) => (
+                    <li key={i}>{x}</li>
+                  ))}
+                </ul>
+                <b>异常与恢复</b>
+                <ul>
+                  {note.exceptions.map((x: string, i: number) => (
+                    <li key={i}>{x}</li>
+                  ))}
+                </ul>
+              </section>
+            ),
+          )}
+          {!dual && (
+            <p>此历史版本尚未生成双视图与逐页说明，以下为原有结构化信息。</p>
+          )}
+          <details open>
+            <summary>流程与状态</summary>
+            {shownMetadata?.scenarios?.map((x: any) => (
+              <p key={x.id}>
+                <b>{x.entry}</b>
+                <br />
+                {x.flow.join(" → ")} → {x.result}
+              </p>
+            ))}
+            {shownMetadata?.states?.map((x: any) => (
+              <p key={x.id}>
+                {x.id}：{x.description}
+              </p>
+            ))}
+          </details>
+          <details>
+            <summary>本次范围与待确认问题</summary>
+            <p>包含：{shownMetadata?.scope?.included?.join("、")}</p>
+            <p>
+              不包含：{shownMetadata?.scope?.excluded?.join("、") || "未列出"}
+            </p>
+            {shownMetadata?.decisions?.map((x: any) => (
+              <p key={x.id}>
+                {x.id} [{x.status}] {x.summary}
+              </p>
+            ))}
+          </details>
+        </aside>
       </div>
       {selection && (
         <div className="contextual-composer">
@@ -2703,12 +2923,10 @@ function SettingsView({
   const [templateText, setTemplateText] = useState(
     template?.release?.content || "",
   );
+  const [templateMode, setTemplateMode] = useState<"edit" | "preview">("edit");
   const [roles, setRoles] = useState<Role[]>(
     data.settings?.defaults?.reviewRoles || DEFAULT_ROLES,
   );
-  const effectiveModel = model || data.settings.model || "gpt-5.6-terra";
-  const effectiveEffort = effort || data.settings.reasoningEffort || "medium";
-
   useEffect(() => {
     setTemplateText(template?.release?.content || "");
   }, [template?.release?.id]);
@@ -2716,14 +2934,6 @@ function SettingsView({
     setRoles(data.settings?.defaults?.reviewRoles || DEFAULT_ROLES);
   }, [JSON.stringify(data.settings?.defaults?.reviewRoles || [])]);
 
-  const saveAssistant = () =>
-    run(async () => {
-      await api("/settings", "PATCH", {
-        model: effectiveModel,
-        executor: "codex",
-        reasoningEffort: effectiveEffort,
-      });
-    }, "Codex 默认设置已保存");
   const saveTemplate = () =>
     run(async () => {
       if (!template) throw new Error("全局模板不存在");
@@ -2751,60 +2961,10 @@ function SettingsView({
         <div>
           <p className="eyebrow">WORKBENCH</p>
           <h1>设置</h1>
-          <p>只保留 Codex、全局 PRD 模板和评审角色。</p>
+          <p>全局 PRD 模板和评审角色。账号管理位于右上角。</p>
         </div>
       </header>
       <div className="settings-sections">
-        <section className="setting-card">
-          <div className="setting-title">
-            <div>
-              <Bot size={18} />
-              <div>
-                <b>Codex</b>
-                <span>使用工作台绑定的 Codex</span>
-              </div>
-            </div>
-            <span className={`status-dot ${status?.codex?.state || ""}`}>
-              {status?.codex?.state === "configured" ? "已连接" : "待连接"}
-            </span>
-          </div>
-          <div className="form-grid">
-            <div className="list-field">
-              <span>模型 ID</span>
-              <ListSelect
-                label="模型 ID"
-                heading="默认"
-                description="推荐模型"
-                value={effectiveModel}
-                options={MODEL_OPTIONS}
-                onChange={setModel}
-              />
-            </div>
-            <div className="list-field">
-              <span>思考深度</span>
-              <ListSelect
-                label="思考深度"
-                heading="强度"
-                description="默认推理强度"
-                value={effectiveEffort}
-                options={EFFORT_OPTIONS}
-                onChange={setEffort}
-              />
-            </div>
-          </div>
-          <div className="setting-actions">
-            <button
-              className="ghost"
-              onClick={() => api("/status").then(setStatus)}
-            >
-              刷新状态
-            </button>
-            <button className="primary" onClick={saveAssistant}>
-              保存
-            </button>
-          </div>
-        </section>
-
         <section className="setting-card wide">
           <div className="setting-title">
             <div>
@@ -2818,12 +2978,45 @@ function SettingsView({
               保存模板
             </button>
           </div>
-          <textarea
-            aria-label="全局 PRD 模板"
-            className="template-editor"
-            value={templateText}
-            onChange={(e) => setTemplateText(e.target.value)}
-          />
+          <div className="template-toolbar">
+            <div className="segmented" role="group" aria-label="模板显示方式">
+              <button
+                className={templateMode === "edit" ? "active" : ""}
+                aria-pressed={templateMode === "edit"}
+                onClick={() => setTemplateMode("edit")}
+              >
+                编辑
+              </button>
+              <button
+                className={templateMode === "preview" ? "active" : ""}
+                aria-pressed={templateMode === "preview"}
+                onClick={() => setTemplateMode("preview")}
+              >
+                预览
+              </button>
+            </div>
+            <span>预览包含当前未保存的修改</span>
+          </div>
+          {templateMode === "preview" ? (
+            <div
+              className="template-preview"
+              role="region"
+              aria-label="全局 PRD 模板预览"
+            >
+              {templateText.trim() ? (
+                <MarkdownDocument content={templateText} />
+              ) : (
+                <p className="muted">暂无内容，切换到编辑添加模板。</p>
+              )}
+            </div>
+          ) : (
+            <textarea
+              aria-label="全局 PRD 模板"
+              className="template-editor"
+              value={templateText}
+              onChange={(e) => setTemplateText(e.target.value)}
+            />
+          )}
         </section>
 
         <section className="setting-card wide">

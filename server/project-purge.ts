@@ -2,16 +2,35 @@ import { rm, lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { Store, check } from "./db.ts";
 // Keep a durable tombstone until every file has been removed. Interrupted cleanup is retryable.
-export async function purgeProject(
+export const purgeProject = (
+  s: Store,
+  id: string,
+  name: string,
+  actor = "user",
+) => purgeResource(s, id, name, actor, "project");
+export const purgeRequirement = (
+  s: Store,
+  id: string,
+  name: string,
+  actor = "user",
+) => purgeResource(s, id, name, actor, "requirement");
+async function purgeResource(
   s: Store,
   id: string,
   confirmedName: string,
-  actor = "user",
+  actor: string,
+  kind: "project" | "requirement",
 ) {
-  check(actor === "user", "只有用户可以永久删除项目", 403);
-  const trash = s.get("projectTrash", id);
-  check(confirmedName === trash.name, "请输入完整项目名称确认永久删除", 409);
-  check(!s.maybe("project", id), "项目已经恢复，不能永久删除", 409);
+  const trashKind = kind === "project" ? "projectTrash" : "requirementTrash";
+  const column = kind === "project" ? "project_id" : "requirement_id";
+  check(actor === "user", "只有用户可以永久删除", 403);
+  const trash = s.get(trashKind, id);
+  check(
+    confirmedName === trash.name,
+    `请输入完整${kind === "project" ? "项目" : "需求"}名称确认永久删除`,
+    409,
+  );
+  check(!s.maybe(kind, id), "内容已经恢复，不能永久删除", 409);
   const safeId = (value: string) => {
     check(/^[a-zA-Z0-9_-]+$/.test(value), "无效文件标识，已阻止清理", 409);
     return value;
@@ -27,7 +46,7 @@ export async function purgeProject(
         paths.push([folder, safeId(data.id)]);
     if (kind === "publication") paths.push(["delivery", safeId(data.id)]);
   }
-  s.put("projectTrash", { ...trash, purging: true });
+  s.put(trashKind, { ...trash, purging: true });
   for (const parts of paths) {
     const parent = join(s.root, parts[0]);
     try {
@@ -75,15 +94,15 @@ export async function purgeProject(
     }
   return s.tx(() => {
     const chunks = s.db
-      .prepare("SELECT id FROM knowledge_chunks WHERE project_id=?")
+      .prepare(`SELECT id FROM knowledge_chunks WHERE ${column}=?`)
       .all(id) as Array<{ id: string }>;
     const removeFts = s.db.prepare(
       "DELETE FROM knowledge_fts WHERE chunk_id=?",
     );
     for (const chunk of chunks) removeFts.run(chunk.id);
-    s.db.prepare("DELETE FROM knowledge_chunks WHERE project_id=?").run(id);
-    s.remove("projectTrash", id);
-    s.audit(actor, "project.purge", id);
+    s.db.prepare(`DELETE FROM knowledge_chunks WHERE ${column}=?`).run(id);
+    s.remove(trashKind, id);
+    s.audit(actor, `${kind}.purge`, id);
     return { id, deleted: true, permanent: true };
   });
 }

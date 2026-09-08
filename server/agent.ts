@@ -82,6 +82,8 @@ export function agentPrompt(input: AgentInput) {
 先理解宿主提供的上下文和自动检索资料。你是在延续同一需求的多轮会话，必须使用历史 messages、questions 和当前成果，不能把每条用户消息当成全新的需求。
 ${stageInstructions(input)}
 
+${input.snapshot.dualPrototype ? `本次原型必须一次交付双视图：共用页面 DOM、业务 JS 和 metadata，分别编写 style#prototype-high-fidelity 与 style#prototype-wireframe，两者为独立完整的视觉样式。CSS 以 html[data-prototype-view="high"] 和 html[data-prototype-view="wireframe"] 分别限定作用域；默认 html 属性 data-prototype-view="high"。宿主下拉框切换该属性，不再调用模型。默认 iPhone 17 Pro 402×874。metadata 增加 presentation:{format:"dual-fidelity",explanations:[{pageId,title,purpose,interactions:[],rules:[],exceptions:[]}]}；每个 pages 页面恰有一份解释，具体说明目标、操作反馈、业务依据和异常，引用已存在的 D 编号并保留状态。两份 CSS 不得只有占位或简单滤镜，线框图采用灰阶描边与图片占位，高保真采用完整组件视觉。局部迭代同时维护两种视图，保留双视图样式和解释。` : ""}
+${input.snapshot.upgradePrototype ? "本次基础版本是旧单视图，仍必须补齐双视图和逐页解释；通过精确 patches 添加两套样式并同步 prototype-meta 与 metadata，不沿用旧格式。保留已有业务 DOM、行为和历史决策，不将兼容历史理解为新产物可省略双视图。" : ""}
 【产物契约】
 - requirement：Markdown 需求卡。
 - prototype：自包含 HTML，不使用外链资源，JS 可点击，至少覆盖主流程与关键错误/空状态。metadata 契约：schemaVersion=1.0, requirementName,module,prototypeVersion=v0.1,prototypeStatus=Draft,device:{orientation:portrait|landscape,platform:[web]},scope:{included:[],excluded:[]},pages:[{id,name}],scenarios:[{id,entry,flow:[],result}],states:[{id,description}],decisions:[{id:D-001,summary,status:已确认|待确认|已排除|已替代}]。HTML 中包含同一份 JSON script#prototype-meta。

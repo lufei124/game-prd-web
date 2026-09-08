@@ -34,14 +34,17 @@ export function DeleteResourceDialog({ target, onClose, onDelete }: any) {
     <dialog
       ref={ref}
       className="resource-dialog delete-dialog"
-      aria-label={`删除${type}`}
+      aria-label={`${target.permanent ? "永久删除" : "删除"}${type}`}
       onCancel={(e) => {
         if (busy) e.preventDefault();
         else onClose();
       }}
     >
       <header>
-        <h2>删除{type}</h2>
+        <h2>
+          {target.permanent ? "永久删除" : "删除"}
+          {type}
+        </h2>
         <button
           className="icon-button"
           aria-label="关闭删除确认"
@@ -52,11 +55,17 @@ export function DeleteResourceDialog({ target, onClose, onDelete }: any) {
         </button>
       </header>
       <div className="resource-dialog-body">
-        <p>将「{target.name}」移入回收站，可恢复。</p>
+        <p>
+          {target.permanent
+            ? `永久删除「${target.name}」及其关联内容，此操作不可恢复。`
+            : `将「${target.name}」移入回收站，可恢复。`}
+        </p>
         <p className="muted">
-          {target.kind === "project"
-            ? "关联需求、知识、成果和历史一并移入回收站。"
-            : "保留该需求的对话、成果、历史和专属附件以供恢复，其他需求及项目公共资料不受影响。"}
+          {target.permanent
+            ? "将清理关联历史、对话、成果和本机附件备份。"
+            : target.kind === "project"
+              ? "关联需求、知识、成果和历史一并移入回收站。"
+              : "保留该需求的对话、成果、历史和专属附件以供恢复，其他需求及项目公共资料不受影响。"}
           不会删除本地资料源原文件或远端飞书文档。
         </p>
         <label>
@@ -82,7 +91,7 @@ export function DeleteResourceDialog({ target, onClose, onDelete }: any) {
           onClick={submit}
         >
           <Trash2 size={14} />
-          {busy ? "正在处理…" : "移入回收站"}
+          {busy ? "正在处理…" : target.permanent ? "永久删除" : "移入回收站"}
         </button>
       </footer>
     </dialog>
@@ -161,17 +170,26 @@ export function ResourceManager({
                 删除项目
               </button>
             ) : (
-              <button
-                className="ghost"
-                disabled={Boolean(busy) || item.purging}
-                onClick={() => restore(item)}
-              >
-                {item.purging
-                  ? "清理中"
-                  : busy === item.id
-                    ? "恢复中…"
-                    : "恢复"}
-              </button>
+              <>
+                <button
+                  className="ghost"
+                  disabled={Boolean(busy) || item.purging}
+                  onClick={() => restore(item)}
+                >
+                  {item.purging
+                    ? "清理中"
+                    : busy === item.id
+                      ? "恢复中…"
+                      : "恢复"}
+                </button>
+                <button
+                  className="ghost"
+                  disabled={Boolean(busy)}
+                  onClick={() => onDelete({ ...item, permanent: true })}
+                >
+                  {item.purging ? "重试永久删除" : "永久删除"}
+                </button>
+              </>
             )}
           </div>
         ))}

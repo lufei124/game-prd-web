@@ -2,6 +2,19 @@ import type { AgentInput, AgentHost, AgentRuntime } from "../server/agent.ts";
 import type { DeliveryPlugin, RemoteDoc } from "../server/plugins.ts";
 
 export const metadata = {
+  presentation: {
+    format: "dual-fidelity",
+    explanations: [
+      {
+        pageId: "reward",
+        title: "每日奖励页",
+        purpose: "让用户领取当日奖励并了解领取结果",
+        interactions: ["点击领取后显示成功反馈并禁用重复领取"],
+        rules: ["D-001 [已确认] 每日仅能领取一次"],
+        exceptions: ["网络异常时提示失败，点击重试恢复可领取状态"],
+      },
+    ],
+  },
   schemaVersion: "1.0",
   requirementName: "每日奖励",
   module: "rewards",
@@ -27,7 +40,7 @@ export const metadata = {
 };
 
 export const html = (ink = false) =>
-  `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>body{background:${ink ? "#202521" : "#f6f8f5"};color:${ink ? "#f4eee3" : "#163d32"};font-family:${ink ? "Georgia" : "sans-serif"};padding:35px}button{background:${ink ? "#e4a55f" : "#397e68"};color:white;border:0;border-radius:${ink ? "3px" : "10px"};padding:14px;margin:5px}section{max-width:420px;margin:30px auto}h1{font-size:30px}</style></head><body><section><p>DAILY REWARDS</p><h1>每日奖励</h1><p id="status">可领取</p><button id="claim">领取奖励</button><button id="error">模拟网络异常</button><button id="reset">重试</button></section><script id="prototype-meta" type="application/json">${JSON.stringify(metadata)}</script><script>let claimed=false;document.querySelector('#claim').onclick=()=>{if(!claimed){claimed=true;document.querySelector('#status').textContent='领取成功';document.querySelector('#claim').disabled=true}};document.querySelector('#error').onclick=()=>document.querySelector('#status').textContent='网络异常';document.querySelector('#reset').onclick=()=>{claimed=false;document.querySelector('#status').textContent='可领取';document.querySelector('#claim').disabled=false};</script></body></html>`;
+  `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style id="prototype-high-fidelity">body{background:${ink ? "#202521" : "#f6f8f5"};color:${ink ? "#f4eee3" : "#163d32"};font-family:${ink ? "Georgia" : "sans-serif"};padding:35px}button{background:${ink ? "#e4a55f" : "#397e68"};color:white;border:0;border-radius:${ink ? "3px" : "10px"};padding:14px;margin:5px}section{max-width:420px;margin:30px auto}h1{font-size:30px}</style><style id="prototype-wireframe">html[data-prototype-view="wireframe"] body{background:#fff;color:#222;font-family:sans-serif}html[data-prototype-view="wireframe"] button{background:#eee;color:#222;border:1px solid #555;border-radius:0;box-shadow:none}</style></head><body><section><p>DAILY REWARDS</p><h1>每日奖励</h1><p id="status">可领取</p><button id="claim">领取奖励</button><button id="error">模拟网络异常</button><button id="reset">重试</button></section><script id="prototype-meta" type="application/json">${JSON.stringify(metadata)}</script><script>let claimed=false;document.querySelector('#claim').onclick=()=>{if(!claimed){claimed=true;document.querySelector('#status').textContent='领取成功';document.querySelector('#claim').disabled=true}};document.querySelector('#error').onclick=()=>document.querySelector('#status').textContent='网络异常';document.querySelector('#reset').onclick=()=>{claimed=false;document.querySelector('#status').textContent='可领取';document.querySelector('#claim').disabled=false};</script></body></html>`;
 
 export const prd =
   "# 每日奖励\n\n## 功能说明\n用户每天领取一次奖励。\n\n## 功能规则\nR-001 用户每天只可领取一次，服务端事务发奖。\n\n## 异常与边界\n网络失败允许重试，服务端幂等防止重复。\n\n## 验收标准\nAC-001 对应 R-001：重复领取时不重复发奖。";
@@ -84,7 +97,7 @@ export class MockRuntime implements AgentRuntime {
         (v: any) => v.id === snap.heads.prototype,
       );
       if (base) {
-        if (snap.conversation) {
+        if (snap.conversation && snap.scope !== "visual") {
           const selectedButton = base.content.match(
             /<button id="claim"[^>]*>领取奖励<\/button>/,
           )![0];
@@ -117,6 +130,8 @@ export class MockRuntime implements AgentRuntime {
       content =
         "# 每日奖励\n" +
         sections
+          // This Mock has no open decisions; omit the template's optional section.
+          .filter((h: string) => !h.includes("上线与待确认事项（按需）"))
           .map((h: string) => h + "\n用户每天可领取一次，服务端负责校验。")
           .join("\n\n") +
         "\n\nR-001 每日一次。\nAC-001 对应 R-001：重复领取不发奖。\n异常：网络失败可以重试。";

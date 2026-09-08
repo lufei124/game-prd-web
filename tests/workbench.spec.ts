@@ -538,13 +538,13 @@ test("prototype iframe cannot reach parent storage or the workbench API", async 
   ).toBeNull();
 });
 
-test("settings persist Codex defaults, global template and review roles", async ({
+test("settings keep template and review roles with account controls in header", async ({
   page,
 }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "设置" }).click();
   await expect(
-    page.getByText("只保留 Codex、全局 PRD 模板和评审角色。"),
+    page.getByText("全局 PRD 模板和评审角色。账号管理位于右上角。"),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "登录", exact: true }),
@@ -561,18 +561,24 @@ test("settings persist Codex defaults, global template and review roles", async 
       .first()
       .getByRole("button", { name: "退出登录" }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "模型 ID", exact: true }).click();
-  await page.getByRole("option", { name: "GPT-5.6 Sol" }).click();
-  await page.getByRole("button", { name: "思考深度", exact: true }).click();
-  await page.getByRole("option", { name: "高", exact: true }).click();
-  await page
-    .locator(".setting-card")
-    .first()
-    .getByRole("button", { name: "保存" })
-    .click();
+  await expect(page.getByText("使用工作台绑定的 Codex")).toHaveCount(0);
   await page
     .getByLabel("全局 PRD 模板")
     .fill("# {{需求名称}}\n## 目标\n## 规则\n## 验收标准");
+  const draft =
+    "# 模板预览\n## 验收标准\n**重点**\n- 验收项\n\n| 事件名称 | 类型 |\n|---|---|\n| page_view | string |";
+  await page.getByLabel("全局 PRD 模板", { exact: true }).fill(draft);
+  await page.getByRole("button", { name: "预览", exact: true }).click();
+  const preview = page.getByRole("region", { name: "全局 PRD 模板预览" });
+  await expect(
+    preview.getByRole("heading", { name: "模板预览" }),
+  ).toBeVisible();
+  await expect(preview.getByRole("cell", { name: "page_view" })).toBeVisible();
+  await expect(preview.locator("strong")).toHaveText("重点");
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+  await expect(page.getByLabel("全局 PRD 模板", { exact: true })).toHaveValue(
+    draft,
+  );
   await page.getByRole("button", { name: "保存模板" }).click();
   await page.getByRole("button", { name: "添加角色" }).click();
   const lastRole = page.locator(".role-row").last();
@@ -581,12 +587,6 @@ test("settings persist Codex defaults, global template and review roles", async 
   await page.getByRole("button", { name: "保存角色" }).click();
   await page.reload();
   await page.getByRole("button", { name: "设置" }).click();
-  await expect(
-    page.getByRole("button", { name: "模型 ID", exact: true }),
-  ).toContainText("GPT-5.6 Sol");
-  await expect(
-    page.getByRole("button", { name: "思考深度", exact: true }),
-  ).toContainText("高");
   await expect(page.getByLabel("全局 PRD 模板")).toHaveValue(/## 验收标准/);
   await expect(
     page.locator(".role-row").last().locator("input").nth(0),
@@ -629,9 +629,19 @@ test("document reading, draft preservation, history, command menu and narrow wor
   await page.keyboard.press("Escape");
   await expect(page.getByLabel("选区修改要求")).toHaveCount(0);
   await page.getByLabel("原型预览尺寸").selectOption("mobile");
-  await expect(page.locator(".prototype-frame")).toHaveCSS("width", "390px");
+  await expect(page.locator(".prototype-frame")).toHaveCSS("width", "402px");
   await page.getByRole("button", { name: "专注成果" }).click();
   await expect(page.locator(".conversation-pane")).toBeHidden();
+  for (const width of [1920, 1512, 1100]) {
+    await page.setViewportSize({ width, height: 982 });
+    const workspaceBounds = await page.locator(".workbench").boundingBox();
+    const artifactBounds = await page.locator(".artifact-pane").boundingBox();
+    expect(
+      Math.abs(artifactBounds!.width - workspaceBounds!.width),
+    ).toBeLessThan(2);
+  }
+  await page.setViewportSize({ width: 1512, height: 982 });
+
   await page.getByRole("button", { name: "显示对话" }).click();
   await page.keyboard.press("ControlOrMeta+k");
   await expect(page.getByRole("dialog")).toBeVisible();
@@ -989,7 +999,7 @@ test("@smoke new requirement through candidate apply to PRD", async ({
   await page.getByLabel("选区修改要求").fill("把这个按钮放到右边");
   await page.getByLabel("选区修改要求").press("Enter");
   await expect(page.getByText(/AI 修改候选，仅预览/)).toBeVisible();
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.getByRole("button", { name: "应用修改", exact: true }).click();
   await expect(page.getByText(/AI 修改候选，仅预览/)).toHaveCount(0);
   await expect(frame.locator("#claim")).toHaveAttribute("style", /float:right/);
   await page.getByRole("button", { name: "确认原型", exact: true }).click();
@@ -1152,4 +1162,174 @@ test("desktop splitters resize, persist, reset and keep narrow layouts usable", 
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+});
+
+test("trash permanently deletes projects and requirements only after name confirmation", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const p = await createProject(page, "永久删除验收");
+  const r = await post(page, "/requirements", {
+    projectId: p.id,
+    name: "待清理需求",
+  });
+  const remove = async (path: string, name: string) =>
+    page.evaluate(
+      async ({ path, name }) => {
+        const b = await (await fetch("/api/bootstrap")).json();
+        const response = await fetch("/api" + path, {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Forge-CSRF": b.csrf,
+          },
+          body: JSON.stringify({ confirmedName: name }),
+        });
+        if (!response.ok) throw new Error(await response.text());
+      },
+      { path, name },
+    );
+  await remove(`/requirements/${r.id}`, r.name);
+  await page.reload();
+  await page.getByRole("button", { name: "回收站", exact: true }).click();
+  const row = page.locator(".resource-row").filter({ hasText: r.name });
+  await row.getByRole("button", { name: "永久删除", exact: true }).click();
+  const confirm = page.getByRole("dialog", {
+    name: "永久删除需求",
+    exact: true,
+  });
+  await expect(confirm).toContainText("不可恢复");
+  await expect(
+    confirm.getByRole("button", { name: "永久删除", exact: true }),
+  ).toBeDisabled();
+  await confirm.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "永久删除", exact: true }).click();
+  await confirm.getByLabel("输入名称确认删除").fill(r.name);
+  await confirm.getByRole("button", { name: "永久删除", exact: true }).click();
+  await expect(row).toHaveCount(0);
+  await page.getByLabel("关闭管理面板").click();
+  await remove(`/projects/${p.id}`, p.name);
+  await page.reload();
+  await page.getByRole("button", { name: "回收站", exact: true }).click();
+  const projectRow = page.locator(".resource-row").filter({ hasText: p.name });
+  await projectRow
+    .getByRole("button", { name: "永久删除", exact: true })
+    .click();
+  const projectConfirm = page.getByRole("dialog", {
+    name: "永久删除项目",
+    exact: true,
+  });
+  await projectConfirm.getByLabel("输入名称确认删除").fill(p.name);
+  await projectConfirm
+    .getByRole("button", { name: "永久删除", exact: true })
+    .click();
+  await expect(projectRow).toHaveCount(0);
+});
+
+test("prototype is optional and skip proceeds to PRD without generating a prototype", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const project = await createProject(page, "跳过原型验收");
+  await page.getByRole("button", { name: "新需求", exact: true }).click();
+  await page.getByLabel("需求对话输入").fill("面向每天登录的用户");
+  await page.getByLabel("需求对话输入").press("Enter");
+  await expect(
+    page.getByRole("button", { name: "跳过原型，生成 PRD", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "跳过原型，生成 PRD", exact: true })
+    .click();
+  await expect(page.locator(".markdown-document")).toContainText("AC-001");
+  const req = (await get(page, "/bootstrap")).requirements.find(
+    (r: any) => r.projectId === project.id,
+  );
+  const ws = await get(page, `/requirements/${req.id}`);
+  expect(ws.requirement.heads.prototype).toBeFalsy();
+  expect(ws.requirement.waiver.requirementVersion).toBe(
+    ws.requirement.heads.requirement,
+  );
+  expect(ws.tasks.some((t: any) => t.kind === "prototype")).toBe(false);
+});
+
+test("prototype bundle switches both views without generation and shows explanations", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const project = await createProject(page, "双视图验收");
+  await page.getByRole("button", { name: "新需求", exact: true }).click();
+  await page.getByLabel("需求对话输入").fill("面向每天登录的用户");
+  await page.getByLabel("需求对话输入").press("Enter");
+  await expect(page.getByLabel("生成原型风格")).toHaveCount(0);
+  await page.getByRole("button", { name: "确认需求", exact: true }).click();
+  const frame = page.frameLocator('iframe[title="交互原型"]');
+  await expect(frame.locator("#claim")).toBeVisible();
+  await expect(page.getByLabel("原型预览尺寸")).toHaveValue("mobile");
+  await expect(page.locator(".prototype-frame")).toHaveCSS("width", "402px");
+  await expect(page.locator(".prototype-frame")).toHaveCSS("height", "874px");
+  await expect(page.getByLabel("原型解释")).toContainText("每日奖励页");
+  await expect(page.getByLabel("原型解释")).toContainText(
+    "点击重试恢复可领取状态",
+  );
+  await expect(
+    page.getByRole("button", { name: "生成高保真", exact: true }),
+  ).toHaveCount(0);
+  const b = await get(page, "/bootstrap");
+  const req = b.requirements.find((r: any) => r.projectId === project.id);
+  const initial = await get(page, `/requirements/${req.id}`);
+  for (const mode of ["wireframe", "high", "wireframe"]) {
+    await page.getByLabel("原型视图", { exact: true }).selectOption(mode);
+    await expect(frame.locator("html")).toHaveAttribute(
+      "data-prototype-view",
+      mode,
+    );
+    await expect(frame.locator("#claim")).toHaveCSS(
+      "border-radius",
+      mode === "wireframe" ? "0px" : "10px",
+    );
+    await expect
+      .poll(() =>
+        frame
+          .locator("#claim")
+          .evaluate((el: HTMLButtonElement) => typeof el.onclick),
+      )
+      .toBe("function");
+    await frame.locator("#reset").click();
+    await frame.locator("#claim").click();
+    await expect(frame.locator("#status")).toHaveText("领取成功");
+  }
+  const after = await get(page, `/requirements/${req.id}`);
+  expect(after.tasks.length).toBe(initial.tasks.length);
+  expect(after.requirement.heads.prototype).toBe(
+    initial.requirement.heads.prototype,
+  );
+  await page.getByLabel("原型缩放比例").selectOption("50");
+  await expect
+    .poll(
+      async () => (await page.locator(".prototype-frame").boundingBox())!.width,
+    )
+    .toBe(201);
+  expect(await frame.locator("html").evaluate(() => innerWidth)).toBe(402);
+  const clickScaled = async (selector: string) => {
+    const outer = (await page.locator(".prototype-frame").boundingBox())!;
+    const inner = await frame.locator(selector).evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    await page.mouse.click(outer.x + inner.x * 0.5, outer.y + inner.y * 0.5);
+  };
+  await clickScaled("#reset");
+  await clickScaled("#claim");
+  await expect(frame.locator("#status")).toHaveText("领取成功");
+  await page.getByLabel("原型缩放比例").selectOption("150");
+  await expect
+    .poll(
+      async () => (await page.locator(".prototype-frame").boundingBox())!.width,
+    )
+    .toBe(603);
+  await page.getByLabel("原型缩放比例").selectOption("100");
+  await page.screenshot({
+    path: "test-results/prototype-dual-explanations.png",
+  });
 });
