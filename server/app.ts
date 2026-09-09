@@ -33,6 +33,7 @@ import {
 } from "./plugins.ts";
 import { purgeProject, purgeRequirement } from "./project-purge.ts";
 import { bootstrap } from "./bootstrap.ts";
+import { pickFolder } from "./folder-picker.ts";
 const text = z.string().trim().min(1).max(500_000),
   id = z.string().min(1).max(100);
 export async function createApp(
@@ -41,6 +42,7 @@ export async function createApp(
     runtime?: AgentRuntime;
     plugin?: DeliveryPlugin;
     test?: boolean;
+    folderPicker?: () => Promise<string | null>;
   } = {},
 ) {
   const s = new Store(root);
@@ -615,6 +617,11 @@ export async function createApp(
       conflicts: knowledge.conflicts(projectId),
     };
   });
+  route("post", "/api/knowledge/pick-directory", async () => ({
+    path: await (
+      options.test && options.folderPicker ? options.folderPicker : pickFolder
+    )(),
+  }));
   route("post", "/api/knowledge/sources", async (r) => {
     const body = z
       .object({

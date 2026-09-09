@@ -400,3 +400,8 @@ Inspect 的 postMessage 只接收当前原型 iframe，Escape 可以从 iframe �
 ### 原型缩放
 
 原型工具栏按 25%–200% 调整预览比例，偏好保存于浏览器 `forge:prototype-zoom`。外部缩放容器负责显示尺寸，iframe 内部 iPhone 17 Pro 画布保持 402×874；自适应模式按画布可用宽度计算。缩放不重载成果、不修改版本或触发模型，放大时保留滚动访问。
+
+### 系统文件夹选择与飞书关联
+
+`POST /api/knowledge/pick-directory` 仅调用固定系统选择器命令，不拼接请求数据，不在选择阶段修改授权或资料源。受现有会话、Origin、CSRF 检查保护，串行打开且有超时；取消返回 null。返回路径后使用既有 sources API 关联与同步。服务在本机运行，窗口显示在服务端桌面；Windows/Linux 原生窗口待对应平台实测。
+飞书使用原生 HTML dialog 的页面模态层，支持 Escape、取消、焦点恢复与提交错误，保留现有服务端链接校验。

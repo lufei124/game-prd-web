@@ -79,9 +79,17 @@ test("knowledge sources sync and chunk search returns relevant text", async ({
   const project = await createProject(page, "知识库验收");
   const projectId = project.id;
   await page.getByRole("button", { name: "知识库" }).click();
-  page.once("dialog", (dialog) =>
-    dialog.accept("/private/tmp/game-prd-web-e2e-knowledge"),
+
+  await page.route(
+    "**/api/knowledge/pick-directory",
+    (route) => route.fulfill({ json: { path: null } }),
+    { times: 1 },
   );
+  await page.getByRole("button", { name: "关联本地文件夹" }).click();
+  await expect(
+    page.getByRole("button", { name: "关联本地文件夹" }),
+  ).toBeEnabled();
+  await expect(page.locator(".source-card")).toHaveCount(0);
   await page.getByRole("button", { name: "关联本地文件夹" }).click();
   await expect(
     page.getByText("会员退款规则.md", { exact: true }),
@@ -96,8 +104,29 @@ test("knowledge sources sync and chunk search returns relevant text", async ({
       .locator(".source-card")
       .filter({ hasText: "game-prd-web-e2e-knowledge" }),
   ).toContainText("0 项变化");
-  page.once("dialog", (dialog) => dialog.accept("feishu-rule"));
   await page.getByRole("button", { name: "关联飞书文档" }).click();
+  const linkDialog = page.getByRole("dialog", { name: "关联飞书文档" });
+  await expect(linkDialog).toBeVisible();
+  await linkDialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(linkDialog).toHaveCount(0);
+  await page.getByRole("button", { name: "关联飞书文档" }).click();
+  const bounds = await linkDialog.boundingBox();
+  const viewport = page.viewportSize()!;
+  expect(
+    Math.abs(bounds!.x + bounds!.width / 2 - viewport.width / 2),
+  ).toBeLessThan(3);
+  expect(
+    Math.abs(bounds!.y + bounds!.height / 2 - viewport.height / 2),
+  ).toBeLessThan(3);
+
+  await expect(
+    linkDialog.getByRole("button", { name: "关联文档", exact: true }),
+  ).toBeDisabled();
+  await linkDialog.getByLabel("飞书文档链接或文档 ID").fill("feishu-rule");
+  await linkDialog
+    .getByRole("button", { name: "关联文档", exact: true })
+    .click();
+  await expect(linkDialog).toHaveCount(0);
   await expect(page.getByText("飞书文档.md", { exact: true })).toBeVisible();
   const feishuState = await get(
     page,

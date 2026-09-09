@@ -40,6 +40,7 @@ import { DocumentEditor, MarkdownDocument } from "./components/DocumentEditor";
 import { ExecutionStatus } from "./components/ExecutionStatus";
 import { DraftRecovery } from "./components/DraftRecovery";
 import { useArtifactDraft } from "./components/useArtifactDraft";
+import { LinkDocumentDialog } from "./components/LinkDocumentDialog";
 import { KnowledgeDocument } from "./components/KnowledgeDocument";
 import { CommandMenu } from "./components/CommandMenu";
 import { AccountMenu } from "./components/AccountMenu";
@@ -2557,6 +2558,8 @@ function KnowledgeView({
   const [results, setResults] = useState<any[]>([]);
   const [searched, setSearched] = useState(false);
   const [sourceFilter, setSourceFilter] = useState("all");
+  const [linkDialog, setLinkDialog] = useState(false);
+  const [pickingFolder, setPickingFolder] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState<any>(null);
   const [syncing, setSyncing] = useState("");
   useEffect(() => {
@@ -2609,11 +2612,7 @@ function KnowledgeView({
     sources.map((x) => `${x.id}:${x.type}:${x.locator}`).join("|"),
   ]);
 
-  const addSource = async (type: "directory" | "feishu") => {
-    const location = window.prompt(
-      type === "directory" ? "本地文件夹绝对路径" : "飞书文档链接或文档 ID",
-    );
-    if (!location?.trim()) return;
+  const addSource = async (type: "directory" | "feishu", location: string) => {
     const next: Source = await api("/knowledge/sources", "POST", {
       projectId,
       type,
@@ -2626,7 +2625,7 @@ function KnowledgeView({
     });
     const list = [...sources.filter((x) => x.id !== next.id), next];
     setSources(list);
-    await syncSource(next, list);
+    await syncSourceCore(next, list);
   };
 
   const doSearch = async () => {
@@ -2658,6 +2657,13 @@ function KnowledgeView({
 
   return (
     <section className="page knowledge-page">
+      {linkDialog && (
+        <LinkDocumentDialog
+          onClose={() => setLinkDialog(false)}
+          onLink={(location) => addSource("feishu", location)}
+        />
+      )}
+
       {selectedDocument && (
         <KnowledgeDocument
           item={selectedDocument}
@@ -2674,10 +2680,28 @@ function KnowledgeView({
           <p>连接已有资料源。AI 只读检索，不修改源文件。</p>
         </div>
         <div className="header-actions">
-          <button className="ghost" onClick={() => addSource("directory")}>
+          <button
+            className="ghost"
+            disabled={pickingFolder}
+            onClick={() =>
+              run(async () => {
+                setPickingFolder(true);
+                try {
+                  const result = await api(
+                    "/knowledge/pick-directory",
+                    "POST",
+                    {},
+                  );
+                  if (result.path) await addSource("directory", result.path);
+                } finally {
+                  setPickingFolder(false);
+                }
+              })
+            }
+          >
             <FolderOpen size={16} /> 关联本地文件夹
           </button>
-          <button className="primary" onClick={() => addSource("feishu")}>
+          <button className="primary" onClick={() => setLinkDialog(true)}>
             <ExternalLink size={16} /> 关联飞书文档
           </button>
         </div>

@@ -567,11 +567,16 @@ test("logs redact key-shaped secrets and remote tokens disallow arbitrary URLs",
 });
 
 test("HTTP CSRF, DNS rebinding and preview isolation headers", async () => {
+  let pickerCalls = 0;
   const root = await mkdtemp(join(tmpdir(), "forge-api-"));
   const f = await createApp(root, {
     runtime: new MockRuntime(),
     plugin: new MockLark(),
     test: true,
+    folderPicker: async () => {
+      pickerCalls++;
+      return null;
+    },
   });
   const server = f.app.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.on("listening", r));
@@ -580,6 +585,22 @@ test("HTTP CSRF, DNS rebinding and preview isolation headers", async () => {
     const boot = await fetch(base + "/api/bootstrap");
     const cookie = boot.headers.get("set-cookie")!.split(";")[0];
     const data = await boot.json();
+    const deniedPicker = await fetch(base + "/api/knowledge/pick-directory", {
+      method: "POST",
+      headers: { cookie },
+    });
+    assert.equal(deniedPicker.status, 403);
+    assert.equal(pickerCalls, 0);
+    const cancelledPicker = await fetch(
+      base + "/api/knowledge/pick-directory",
+      {
+        method: "POST",
+        headers: { cookie, origin: base, "x-forge-csrf": data.csrf },
+      },
+    );
+    assert.equal(cancelledPicker.status, 200);
+    assert.deepEqual(await cancelledPicker.json(), { path: null });
+    assert.equal(pickerCalls, 1);
     let r = await fetch(base + "/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json", cookie },

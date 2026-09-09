@@ -33,6 +33,7 @@ const { app } = await createApp(root, {
   },
   plugin,
   test: true,
+  folderPicker: async () => fixtureDirectory,
 });
 app.use(express.static(resolve("dist")));
 app.get("/{*path}", (_req, res) => res.sendFile(resolve("dist/index.html")));
